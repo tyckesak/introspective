@@ -45,7 +45,7 @@ struct LuaObject: introspective::Introspective<LuaObject>
 
 double LuaObject::pi = 3.14;
 // That's it! No bookkeeping, no keeping track of lists of methods, no manual conversions
-// of arguments from Wren to C++ and back in the bodies. Pure bliss.
+// of arguments from Lua to C++ and back in the bodies. Pure bliss.
 
 
 // All of the conversions happen here, decoupled from everything else.
