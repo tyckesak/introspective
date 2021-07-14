@@ -130,21 +130,21 @@ struct introspective::ArgsMarshalling<WrenForeignMethodFn>  // aka void(*)(WrenV
             void* ptr = wrenGetSlotForeign(V, where);
 
             // Utmost care is warranted here; you need to make sure that the
-            // pointer that Lua returned actually points to a value of the
+            // pointer that Wren returned actually points to a value of the
             // type you are about to cast it into. How you keep track of the C++
-            // types while C++ objects are stored inside Lua is your matter alone,
+            // types while C++ objects are stored inside Wren is your matter alone,
             // whether you decide to do it with metatables or by keeping a list
             // of those objects in C++...
             //
             // In this example we are only dealing with one C++ type, so
-            // we can be confident that any Lua userdata in this example is
-            // of type LuaObject*
+            // we can be confident that any Wren foreigners in this example are
+            // of type WrenObject*
             return std::ref(*static_cast<D*>(ptr));
 
             // Observe that the marshalling does not *create* any
-            // LuaObject objects in Lua; it just facilitates communication between
-            // Lua and C++. The task of actually *constructing* C++ objects inside
-            // Lua falls on you.
+            // WrenObject objects in Wren; it just facilitates communication between
+            // Wren and C++. The task of actually *constructing* C++ objects inside
+            // Wren falls on you.
         }
         else
         {
@@ -157,7 +157,7 @@ struct introspective::ArgsMarshalling<WrenForeignMethodFn>  // aka void(*)(WrenV
     {
         // Same thing as above, but only in reverse: here a C++ function has
         // returned a value of type [Data] and we need to make it accessible to
-        // Lua.
+        // Wren.
 
         using D = std::remove_cv_t<std::remove_reference_t<Data>>;
         if constexpr(std::is_same_v<D, int> || std::is_same_v<D, double>)
@@ -173,8 +173,8 @@ struct introspective::ArgsMarshalling<WrenForeignMethodFn>  // aka void(*)(WrenV
             wrenSetSlotString(V, 0, data);
         }
         // Since this example does not have any reflective functions returning a
-        // value of type [LuaObject] in [LuaObject], I will leave it to the
-        // interested readers to construct a LuaObject here.
+        // value of type [WrenObject] in [WrenObject], I will leave it to the
+        // interested readers to construct a WrenObject here.
         else
         {
             throw "???";
