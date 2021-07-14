@@ -33,40 +33,50 @@
 
 struct LuaObject: introspective::Introspective<LuaObject>
 {
-    int integer;
+    TypedIntrospectiveValueReadonly(int, integer);
     double frac;
 
-    // These member functions do not mutate state, const-qualify them.
+    // This member functions does not mutate state, const-qualify it.
     RuntimeIntrospectiveObjectFn(GetInteger) () -> int const { return integer; }
-    RuntimeIntrospectiveObjectFn(GetFrac) () -> double const { return frac; }
 
+    TypedIntrospectiveValueReadWrite(static double, pi);
     RuntimeIntrospectiveStaticFn(StaticFunction) (int i) -> double { return 3.14 * i; }
 };
 
+double LuaObject::pi = 3.14;
+// That's it! No bookkeeping, no keeping track of lists of methods, no manual conversions
+// of arguments from Wren to C++ and back in the bodies. Pure bliss.
+
+
+// All of the conversions happen here, decoupled from everything else.
 template <>
 struct introspective::ArgsMarshalling<lua_CFunction>  // lua_CFunction, aka int(*)(lua_State*)
 {
 
-    template <typename Data> static auto FromEmbedded(lua_State* L, std::size_t where)
+    template <bool, typename Data> static auto FromEmbedded(lua_State* L, std::size_t where)
     {
         // Observe that Lua indices are 1-based, so it is necessary
         // to increase the argument lookup index by one.
         ++where;
-        if constexpr(std::is_same_v<Data, int>)
+        if constexpr(std::is_same_v<std::remove_cv_t<std::remove_reference_t<Data>>, int>)
         {
             return static_cast<int>(lua_tointeger(L, where));
         }
-        else if constexpr(std::is_same_v<Data, double>)
+        else if constexpr(std::is_same_v<std::remove_cv_t<std::remove_reference_t<Data>>, double>)
         {
             return static_cast<double>(lua_tonumber(L, where));
         }
         // This is the case where Lua userdata is marshalled.
-        else if constexpr(std::is_same_v<std::remove_reference_t<Data>, LuaObject>)
+        // Member accessors and const-qualified member functions require its first argument
+        // to be a const reference to the compound type.
+        // Take care of eventual const-qualifiers and reference types; they are passed to
+        // this function template verbatim and may mess up some template code!
+        else if constexpr(std::is_same_v<std::remove_cv_t<std::remove_reference_t<Data>>, LuaObject>)
         {
             // C++ does not allow pointers to reference types, but that is okay. We simply change
             // the return type of this function to 'auto' and let the compiler deduce the correct
             // reference type.
-            // Const-qualification of [const LuaObject&] is preserved, if present.
+            // Const-qualification of [const LuaObject&] is preserved in this alias, if present.
             using D = std::remove_reference_t<Data>;
             void* ptr = lua_touserdata(L, where);
 
@@ -80,7 +90,7 @@ struct introspective::ArgsMarshalling<lua_CFunction>  // lua_CFunction, aka int(
             // In this example we are only dealing with one C++ type, so
             // we can be confident that any Lua userdata in this example is
             // of type LuaObject*
-            return *static_cast<D*>(ptr);
+            return std::ref(*static_cast<D*>(ptr));
 
             // Observe that the marshalling does not *create* any
             // LuaObject objects in Lua; it just facilitates communication between
@@ -137,7 +147,7 @@ struct introspective::ArgsMarshalling<lua_CFunction>  // lua_CFunction, aka int(
         return 0;
     }
 
-    template <typename... DataArgTypes> static bool PrepareExtraction(lua_State* L)
+    template <bool, typename... DataArgTypes> static bool PrepareExtraction(lua_State* L)
     {
         // The [DataArgTypes]... type sequence contains all parameter types that
         // a C/C++ function is about to be called with, in order. This gives
@@ -158,19 +168,19 @@ struct introspective::ArgsMarshalling<lua_CFunction>  // lua_CFunction, aka int(
 int main()
 {
     // Since we declared three introspective members in [LuaObject], this
-    // compile-time array will have 3 elements.
-    // The elements are calculated at compile-time.
-    constexpr std::array<std::pair<const char*, lua_CFunction>, 3> luaReady
+    // compile-time array will have 5 elements. Note that a read-write
+    // property provides two members, one getter and one setter.
+    constexpr std::array<introspective::FnBrief<lua_CFunction>, 5> luaReady
         = introspective::MarshalledFns<lua_CFunction>(LuaObject::GetMembers());
 
     lua_State* L = luaL_newstate();
     
     // Register the functions with Lua.
     std::vector<luaL_Reg> luaFns;
-    for (auto pair: luaReady)
+    for (auto briefs: luaReady)
     {
         // The name is the first element, the lua_CFunction goes second.
-        luaFns.push_back(luaL_Reg{ pair.first, pair.second });
+        luaFns.push_back(luaL_Reg{ briefs.Name, briefs.Fn });
     }
     // luaL_setfuncs requires a null entry at the end.
     luaFns.push_back(luaL_Reg{ nullptr, nullptr });
@@ -180,38 +190,51 @@ int main()
 
     // Use them!
 
-    // Gets the 'GetInteger' global function that has been registered with Lua
+    // Gets the accessor to the 'integer' member variable that has been registered with Lua
     // above. It only requires one parameter, and that is the [this] object,
     // so we need to create a [LuaObject] to call it with.
-    lua_getglobal(L, "GetInteger");
+    lua_getglobal(L, "integer");
     // Creates a new Lua userdata object, initialize it in-place with
-    // a constructor from [LuaObject] and push that object immediately on the Lua stack.
-    LuaObject* o = new (lua_newuserdatauv(L, sizeof(LuaObject), 1)) LuaObject{ .integer = 123, .frac = 2.71 };
+    // a constructor from [LuaObject] and push that object immediately to the Lua stack.
+    new (lua_newuserdatauv(L, sizeof(LuaObject), 1)) LuaObject{ .integer = 123, .frac = 2.71 };
     // The only thing left for us to do is to call the function!
     lua_call(L, 1, 1);
     // Notice that the LuaObject existed only on the stack and has been consumed.
     // The object cannot be referenced anymore from Lua, and so we are left with a
     // possibly dangling LuaObject* pointer, in addition to our failure to let Lua
-    // run the destructor for LuaObject* after it went out of scope.
+    // run the destructor for LuaObject* after it went out of the stack's scope.
     // Look up Lua finalizers for that issue.
-    o = nullptr;  // This pointer has already been freed by Lua, but we have not called the destructor...
-                  // Possible memory leak!
+    
+    // Calling the GetFrac member function is very similar to calling the accessor to [integer],
+    // it also only expects one [const LuaObject&] parameter. The only difference between these two
+    // is how their signatures in the struct [introspective::FnBrief<lua_CFunction>] have been parsed:
+    // The getter for [integer] has an empty arity string, whereas the member function [GetFrac] has
+    // the arity string "()", which means that that comes from a proper function definition.
 
     assert(lua_tointeger(L, 1) == 123);  // Assert passes.
-    std::cout << "o.GetInteger() == " << lua_tointeger(L, 1) << std::endl;
+    std::cout << "LuaObject.integer == " << lua_tointeger(L, 1) << std::endl;
+    lua_pop(L, 1);
+
+    // Call the getter for the static member [pi]
+    lua_getglobal(L, "pi");
+    lua_call(L, 0, 1);
+    std::cout << "LuaObject::pi = " << lua_tonumber(L, 1) << std::endl;
+    lua_pop(L, 1);
+
+    // What if the circle had less... pi.
+    lua_getglobal(L, "pi=");
+    lua_pushnumber(L, 2.71);
+    lua_call(L, 1, 1);
+    // The setter returns the value that has been given to him, just like assignment in C.
+    std::cout << "LuaObject::pi = " << lua_tonumber(L, 1) << std::endl;
     lua_pop(L, 1);
 
     // Let's try calling the static function in [LuaObject].
     lua_getglobal(L, "StaticFunction");
     lua_pushinteger(L, 10);
     lua_call(L, 1, 1);
-    std::cout << "LuaObject::StaticFunction(50) == " << lua_tonumber(L, 1) << std::endl;
+    std::cout << "LuaObject::StaticFunction(10) == " << lua_tonumber(L, 1) << std::endl;
 
     lua_close(L);
-
-
 }
-
-
-
 

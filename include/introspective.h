@@ -21,7 +21,7 @@
 #include <array>
 #include <utility>
 #include <algorithm>
-#include <functional>       // Only used for compile-time type calculations
+#include <functional>
 #include <type_traits>
 
 namespace introspective
@@ -181,12 +181,12 @@ auto GenericConstructor(Args... args)
 // standard library - say, std::function.
 #define GetObjectMember(InType, member, MemberType) (ArbitraryDetection::GetInstance<InType, MemberType InType::*>(SemanticsMember(member)))
 
-struct CompileTimeString {
+struct InternedString {
     char const * const str;
     const std::size_t s;
     template <std::size_t n>
-    consteval CompileTimeString(const char (&a)[n]) : str(a), s(n) {}
-    consteval CompileTimeString(char* const a, std::size_t n) : str(a), s(n) {}
+    consteval InternedString(const char (&a)[n]): str(a), s(n) {}
+    consteval InternedString(char* const a, std::size_t n): str(a), s(n) {}
 
     consteval char operator[](std::size_t n) const
     {
@@ -200,47 +200,73 @@ struct CompileTimeString {
 // nor indirectly through functions.
 //
 // Name is shorthand for 'Compile Time String'
-template <char... cs> struct ctstr
+template <char... cs> struct CompileTimeString
 {
     constexpr static inline char String[sizeof...(cs)] = {cs...};
-    constexpr static inline std::size_t Length = sizeof...(cs);
-    consteval ctstr() = default;
+    constexpr static inline std::size_t Len = sizeof...(cs);
+
+    template <std::size_t... is>
+    consteval static inline auto Select(std::index_sequence<is...>)
+    {
+        return CompileTimeString<String[is]...>{};
+    }
+    template <char... ds>
+    consteval static inline auto TailCat(const CompileTimeString<ds...>&) { return CompileTimeString<cs..., ds...>{}; }
+    consteval static inline auto TossedTail()
+    {
+        return Select(std::make_index_sequence<Len - 1>());
+    }
+
+    template <char... ds>
+    consteval static inline auto Cat(const CompileTimeString<ds...>& that)
+    {
+        return TossedTail().TailCat(that);
+    }
+
+    template <char... ds>
+    consteval inline auto operator +(const CompileTimeString<ds...>& that) const
+    {
+        return Cat(that);
+    }
 };
 
 // Maaaaybe file a bug report for this in g++, this contraption caused
 // the compiler to crash.
 // The tcstr_s template and its specializations are functionally equivalent
 // to the consteval function tcstr() defined just below.
-template <CompileTimeString str, int i, typename = void, char... coll>
+template <InternedString str, int i, typename = void, char... coll>
 struct tcstr_s
 {
-    using type = ctstr<str[i], coll...>;
+    using type = CompileTimeString<str[i], coll...>;
 };
 
-template <CompileTimeString str, int i, char... coll>
+template <InternedString str, int i, char... coll>
 struct tcstr_s<str, i, std::enable_if_t<std::less{}(i, 0)>, coll...>
 {
     using type = typename tcstr_s<str, str.size() - 1, void>::type;
 };
 
-template <CompileTimeString str, int i, char... coll>
+template <InternedString str, int i, char... coll>
 struct tcstr_s<str, i, std::enable_if_t<std::greater{}(i, 0)>, coll...>
 {
     using type = typename tcstr_s<str, i - 1, void, str[i], coll...>::type;
 };
 
-template <CompileTimeString str>
+template <InternedString str>
 using tcstr_t = typename tcstr_s<str, -1>::type;
 
 // Name is shorthand for 'to compiled string'.
-template <CompileTimeString str, int i = -1, char... coll>
-consteval auto tcstr()
+template <InternedString str, int i = -1, char... coll>
+consteval auto tcstr_f()
 {
-    if constexpr(str.size() == 0) return ctstr<>();
-    else if constexpr(i < 0) return tcstr<str, str.size() - 1>();
-    else if constexpr(i > 0) return tcstr<str, i - 1, str[i], coll...>();
-    else return ctstr<str[i], coll...>();
+    if constexpr(str.size() == 0) return CompileTimeString<>();
+    else if constexpr(i < 0) return tcstr_f<str, str.size() - 1>();
+    else if constexpr(i > 0) return tcstr_f<str, i - 1, str[i], coll...>();
+    else return CompileTimeString<str[i], coll...>();
 }
+
+template <InternedString str>
+constexpr inline auto tcstr = tcstr_f<str>();
 
 template<unsigned... digits>
 constexpr char IntToChars[] = {('0' + digits)..., '\0'};
@@ -252,10 +278,13 @@ consteval auto& CompiledIntString()
     else return CompiledIntString<remaining / 10, remaining % 10, digits...>();
 }
 
-template <std::size_t len> consteval CompileTimeString Intern(const char (&str)[len])
+template <std::size_t len> consteval InternedString Intern(const char (&str)[len])
 {
-    return CompileTimeString(str);
+    return InternedString(str);
 }
+
+template <InternedString str>
+constexpr inline auto Compiled = decltype(tcstr<str>){};
 
 // Settings pertaining to looking up the reflective members of the type 'Where'.
 // Second template parameter leaves space for private specializations based on the first argument, if needed.
@@ -276,25 +305,136 @@ struct IntrospectiveSettings
     constexpr static inline std::size_t MemberLimit = 60;
 };
 
-template <auto... ptrs>
-struct LitColl
-{
-    constexpr static inline auto Len = sizeof...(ptrs);
-};
-
+// Collection of types.
 template <typename... Coll>
 struct TypeColl
 {
     constexpr static inline auto Len = sizeof...(Coll);
 };
 
+// Collection of elements of structural/literal type.
+template <auto... items>
+struct LitColl
+{
+    constexpr static inline auto Len = sizeof...(items);
+
+
+    // Retains select elements of the collection using a predicate.
+    // The predicate needs to have a template operator() function with one
+    // template argument (the item to check) and no ordinary arguments.
+    template <auto predicate>
+    consteval static inline auto Filter()
+    {
+        return Find_impl<predicate, items...>::LiftHay(LitColl<>{});
+    }
+
+    // Maps every element of the collection using a map function.
+    // The map function needs to have a template operator() function with one
+    // template argument (the item to map) and no ordinary arguments.
+    template <auto mapper>
+    consteval static inline auto Map()
+    {
+        return LitColl<mapper.template operator()<items>()...>{};
+    }
+
+    // Concatenation of two literal collections.
+    template <auto... newItems>
+    consteval static inline LitColl<items..., newItems...> Cat(LitColl<newItems...>)
+    {
+        return LitColl<items..., newItems...>{};
+    }
+
+private:
+
+    template <auto predicate, auto... haystack>
+    struct Find_impl;
+
+    template <auto predicate, auto first, auto... rest>
+    struct Find_impl<predicate, first, rest...>
+    {
+        template <auto... accum>
+        consteval static inline auto LiftHay(LitColl<accum...> l)
+        {
+            if constexpr(predicate.template operator()<first>())
+            {
+                return Find_impl<predicate, rest...>::LiftHay(l.Cat(LitColl<first>{}));
+            }
+            else
+            {
+                return Find_impl<predicate, rest...>::LiftHay(l);
+            }
+        }
+    };
+
+    template <auto predicate>
+    struct Find_impl<predicate>
+    {
+        template <auto... accum>
+        consteval static inline auto LiftHay(LitColl<accum...> l) { return l; }
+    };
+};
+
 template <typename _Returned, typename... _Params>
 struct FnSig
 {
+private:
+    constexpr static inline char NoArg[] = "()";
+    constexpr static inline char OneArg[] = "(_)";
+    constexpr static inline char BeginArgs[] = "(_";
+    constexpr static inline char EndArgs[] = ")";
+    constexpr static inline char CatArgs[] = ",_";
+public:
     using Returned = _Returned;
     using Params = TypeColl<_Params...>;
-    constexpr static inline auto ParamsLen = sizeof...(_Params);
+    // The function pointer type, if it were constructed using the return type and the
+    // parameter types that are part of this signature.
+    using FptrType = _Returned(*)(_Params...);
+    constexpr static inline auto Arity = sizeof...(_Params);
+
+    // Computes the arity string for this signature.
+    template <bool reduceAsMember = false>
+    consteval static inline auto ArityString()
+    {
+        if constexpr(Arity == 0) { return Compiled<Intern(NoArg)>; }
+        else if constexpr(Arity == 1 and not reduceAsMember) { return Compiled<Intern(OneArg)>; }
+        else if constexpr(Arity == 1 and     reduceAsMember) { return Compiled<Intern(NoArg)>; }
+        else if constexpr(Arity == 2 and     reduceAsMember) { return Compiled<Intern(OneArg)>; }
+        else
+        {
+            auto remainingCats = []<std::size_t... arities>(std::index_sequence<arities...>) consteval
+            {
+                return (((void) arities, Compiled<Intern(CatArgs)>) + ...);
+            };
+            return Compiled<Intern(BeginArgs)> + remainingCats(std::make_index_sequence<Arity - 1 - reduceAsMember>{}) + Compiled<Intern(EndArgs)>;
+        }
+    }
 };
+
+// Deduction guides for construction of the FnSig type.
+
+template <typename R, typename... Params>
+auto FnToSig(R(*)(Params...)) -> FnSig<R, Params...>;
+
+template <typename R, typename T, typename... Params>
+auto FnToSig(R(T::*)(Params...)) -> FnSig<R, T&, Params...>;
+
+template <typename R, typename T, typename... Params>
+auto FnToSig(R(T::*)(Params...) const) -> FnSig<R, const T&, Params...>;
+
+template <typename R, typename T>
+auto FnToSig(R T::*) -> FnSig<R&, const T&>;
+
+template <typename V>
+auto FnToSig(V*) -> FnSig<V&>;
+
+// Dissection of the signature of the given pointer.
+template <auto fptr>
+using FptrAsSig = decltype(FnToSig(fptr));
+
+// Dissection of the signature of the given pointer type.
+template <typename Fptr>
+using FptrAsSig_r = decltype(FnToSig(std::declval<Fptr>()));
+
 
 // Provides static member functions responsible for providing conversions of
 // the representation of values between the host language (C++) and an embedded
@@ -313,14 +453,25 @@ struct ArgsMarshalling
 {
 };
 
-// Shame on g++, it thinks that std::pair is not a literal type, not worthy of being used
-// as a non-type template parameter.
-// This is a workaround struct around this limitation. Clang and gcc are both happy with this.
-template <auto a, auto b>
-struct LitPair
+template <typename MarshallSig>
+struct FnBrief
 {
-    constexpr static inline auto first = a;
-    constexpr static inline auto second = b;
+    // The name of the C/C++ function that has been wrapped inside .Fn
+    const char* Name;
+    // String denoting how many arguments this function accepts. The arity string takes the forms
+    // ""           (Empty, used instead of "()" the no argument string for getter functions)
+    // "()"         (No argument. Use this for functions that produce side effects)
+    // "(_)"        (One argument)
+    // "(_,_)"      (Two arguments)
+    // "(_,_,_)"    (Three arguments)
+    // ............  and so on.
+    const char* ArityString;
+    // The concatenation of .Name and .ArityString
+    const char* ErasedSig;
+    // Is the wrapped C/C++ function considered as a static function of a class?
+    bool IsStatic;
+    // The wrapping function.
+    MarshallSig Fn;
 };
 
 // Implementation of template algorithms. Not part of public interface.
@@ -328,79 +479,84 @@ struct LitPair
 namespace timpl
 {
 
-template <typename R, typename... Params>
-auto FnToSig(R(*)(Params...)) -> FnSig<R, Params...>;
-
-template <typename R, typename T, typename... Params>
-auto FnToSig(R(T::*)(Params...)) -> FnSig<R, T&, Params...>;
-
-template <typename R, typename T, typename... Params>
-auto FnToSig(R(T::*)(Params...) const) -> FnSig<R, const T&, Params...>;
-
-template <auto fptr, typename = void>
-struct FptrAsSig_t
-{
-    using Type = decltype(FnToSig(fptr));
-};
-
-template <typename F>
-struct FptrAsSig_rt
-{
-    using Type = decltype(FnToSig(std::declval<F>()));
-};
-
-template <auto fptr>
-using FptrAsSig = typename FptrAsSig_t<fptr>::Type;
-
-template <typename Fptr>
-using FptrAsSig_r = typename FptrAsSig_rt<Fptr>::Type;
-
-template <auto fptr, typename MarshallSig>
+template <auto fptr, bool consideredAsObjectMember, typename _MarshallSig>
 struct MarshallFn_impl
 {
-    template <typename... ExArgTypes>
-    struct ExArgWrap
+    using FptrSig = FptrAsSig<fptr>;
+    using MarshallSig = FptrAsSig_r<_MarshallSig>;
+
+    consteval static inline _MarshallSig ToAndFro()
     {
-        template <typename... Args>
-        struct ArgWrap
+        return ExpandTemplateArgsStepOne(typename MarshallSig::Params{}, std::make_index_sequence<FptrSig::Arity>{});
+    };
+
+private:
+
+    template <typename... MarshallArgs, std::size_t... fptrArgNums>
+    consteval static inline _MarshallSig ExpandTemplateArgsStepOne(TypeColl<MarshallArgs...>, std::index_sequence<fptrArgNums...> seq)
+    {
+        return MarshallArgsPackBreak<MarshallArgs...>::template ExpandTemplateArgsStepTwo(typename FptrSig::Params{}, seq);
+    }
+
+    template <typename... MarshallArgs>
+    struct MarshallArgsPackBreak
+    {
+        template <typename... FptrArgs>
+        struct FptrArgsPackBreak
         {
-            template <std::size_t... haystack>
-            static inline typename FptrAsSig_r<MarshallSig>::Returned ToAndFro(ExArgTypes... exArgs)
+            // This function is the only one that will be called at runtime; however this function will
+            // be called over and over again for different constellations of arguments.
+            // The good thing is that most of the contents of this function do not end up in the binary at all
+            // thanks to 'if constexpr'.
+            template <std::size_t... fptrArgNums>
+            static inline auto FnWrapper(MarshallArgs... marshall)
             {
-                if(not ArgsMarshalling<MarshallSig>::template PrepareExtraction<Args...>(exArgs...))
+                using Ret = typename MarshallSig::Returned;
+                constexpr bool isStatic = not consideredAsObjectMember;
+#define Comma ,
+#define X(returnOpt) if constexpr(std::is_void_v<Ret>) { returnOpt; } else { return returnOpt; }
+
+                if(not ArgsMarshalling<_MarshallSig>::template PrepareExtraction<isStatic, FptrArgs...>(marshall...))
                 {
                     // Cannot marshall function arguments over to the host. Panic maybe?
-                    return ArgsMarshalling<MarshallSig>::FailExtracted(exArgs...);
+                    X(ArgsMarshalling<_MarshallSig>::FailExtracted(marshall...))
                 }
 
-                using FptrReturn = std::invoke_result_t<
-                    decltype(fptr),
-                    decltype(ArgsMarshalling<MarshallSig>::template FromEmbedded<Args>(exArgs..., haystack))...>;
-
-                if constexpr(std::is_void_v<FptrReturn>)
+                if constexpr(std::is_member_pointer_v<decltype(fptr)>
+                         || (std::is_pointer_v<decltype(fptr)> && std::is_function_v<std::remove_pointer_t<decltype(fptr)>>))
                 {
-                    // Can't call a function with a void argument extra, so this case
-                    // must be addressed separately.
-                    std::invoke(fptr, ArgsMarshalling<MarshallSig>::template FromEmbedded<Args>(exArgs..., haystack)...);
-                    return ArgsMarshalling<MarshallSig>::ToEmbedded(exArgs...);
+                    if constexpr(std::is_void_v<typename FptrSig::Returned>)
+                    {
+                        // Can't call a function with a void argument extra, so this case
+                        // must be addressed separately.
+                        std::invoke(fptr, ArgsMarshalling<_MarshallSig>::template FromEmbedded<isStatic Comma FptrArgs>(marshall..., fptrArgNums)...);
+                        X(ArgsMarshalling<_MarshallSig>::ToEmbedded(marshall...));
+                    }
+                    else
+                    {
+                        X(ArgsMarshalling<_MarshallSig>::template ToEmbedded(
+                            marshall...
+                    Comma   std::invoke(fptr Comma ArgsMarshalling<_MarshallSig>::template FromEmbedded<isStatic Comma FptrArgs>(marshall... Comma fptrArgNums)...)))
+                    }
                 }
                 else
                 {
-                    return ArgsMarshalling<MarshallSig>::template ToEmbedded(exArgs...,
-                            std::invoke(fptr, ArgsMarshalling<MarshallSig>
-                                            ::template FromEmbedded<Args>(exArgs..., haystack)...));
+                    // This is the case of a boring ol' regular pointer. It cannot be a pointer to void because
+                    // declarations of member variables of type void are illegal.
+                    // It might very well be a void** however. In that case, the marshaller needs to handle the conversion
+                    // of a plain void*.
+                    X(ArgsMarshalling<_MarshallSig>::template ToEmbedded(marshall... Comma *fptr));
                 }
+#undef X
+#undef Comma
             }
         };
-
+        template <typename... FptrArgs, std::size_t... fptrArgNums>
+        consteval static inline _MarshallSig ExpandTemplateArgsStepTwo(TypeColl<FptrArgs...>, std::index_sequence<fptrArgNums...>)
+        {
+            return &FptrArgsPackBreak<FptrArgs...>::template FnWrapper<fptrArgNums...>;
+        }
     };
-
-    // Expand the parameter types of the signatures and prepare all argument index numbers.
-    template <typename... ExArgs, typename... Args, std::size_t... haystack>
-    consteval static MarshallSig PackExpand(TypeColl<ExArgs...>, TypeColl<Args...>, std::index_sequence<haystack...>)
-    {
-        return &ExArgWrap<ExArgs...>::template ArgWrap<Args...>::template ToAndFro<haystack...>;
-    }
 };
 
 
@@ -428,7 +584,7 @@ template <template <int, int> typename Count, int i, typename _Default, typename
 struct IsCountInstantiable_f: std::false_type { using Type = _Default; };
 
 template <template <int, int> typename Count, int i, typename _Default>
-struct IsCountInstantiable_f<Count, i, _Default, std::void_t<typename Count<i, 0>::Head>>
+struct IsCountInstantiable_f<Count, i, _Default, std::void_t<typename Count<i, 0>::TypedName>>: std::true_type
 {
     using Type = Count<i, 0>;
 };
@@ -491,6 +647,59 @@ struct MilesBelowCheck<Check, std::enable_if_t<not std::is_void_v<typename Check
     enum { MilesBelow = 1 + MilesBelowCheck<typename Check::TailAbove>::MilesBelow };
 };
 
+template <typename Compound, typename Data>
+auto MemPtrToHolder(Data Compound::*) -> Compound&;
+
+template <typename Compound, typename Data>
+auto MemPtrToDatatype(Data Compound::*) -> const Data&;
+
+template <auto memptr>
+auto SetMem(decltype(MemPtrToHolder(memptr))& self, const decltype(MemPtrToDatatype(memptr))& val)
+{
+    return self.*memptr = val;
+}
+
+template <auto ptr>
+auto SetStaticMem(std::add_lvalue_reference_t<std::add_const_t<std::remove_pointer_t<decltype(ptr)>>> val)
+{
+    return *ptr = val;
+}
+
+template <auto memberMeta>
+struct MemSetPtrMeta
+{
+private:
+    constexpr static inline char OneArg[] = "(_)";
+    constexpr static inline char Eq[] = "=";
+    constexpr static inline bool IsObjectMember = std::is_member_object_pointer_v<decltype(memberMeta.Stencilled())>;
+    using A = decltype(memberMeta);
+public:
+    // Sadly we lose the array type, C++ will not let constexpr arrays initialize with references to some other
+    // clearly marked constexpr array.
+    constexpr static inline auto Name = decltype(Compiled<Intern(A::Name)> + Compiled<Intern(Eq)>)::String;
+    constexpr static inline auto ErasedSig = decltype(Compiled<Intern(A::Name)> + Compiled<Intern(Eq)> + Compiled<Intern(OneArg)>)::String;
+    consteval static inline auto Stencilled()
+    {
+        if constexpr(IsObjectMember) { return &SetMem<memberMeta.Stencilled()>; }
+        else { return &SetStaticMem<memberMeta.Stencilled()>; }
+    }
+    consteval static inline auto ArityString() { return Compiled<Intern(OneArg)>; }
+    consteval static inline bool IsNonStatic() { return IsObjectMember; }
+
+    using Sig = FptrAsSig<Stencilled()>;
+};
+
+// Forward the 'static'-ness of the function to the marshalling template.
+// I have discovered that some scripting languages make a difference between
+// a call to a static function of a class versus one to an object function;
+// see the example for the scripting language 'Wren' in the examples directory.
+template <auto _fptr, bool _consideredAsObjectMember>
+struct ForwardStaticClass
+{
+    constexpr static inline auto fptr = _fptr;
+    constexpr static inline bool consideredAsObjectMember = _consideredAsObjectMember;
+};
+
 }
 
 // Wraps a function pointer or general callable [fptr] inside a function with signature [MarshallSig] in such a way
@@ -501,34 +710,65 @@ struct MilesBelowCheck<Check, std::enable_if_t<not std::is_void_v<typename Check
 //
 // Conversion of [fptr] to a function with signature [MarshallSig] happens naturally at compile time; the arguments for
 // a call to [fptr] are marshalled at runtime upon calling the function returned from [MarshallFn()].
-template <auto fptr, typename MarshallSig>
+template <typename MarshallSig, auto fptr>
 consteval MarshallSig MarshallFn()
 {
-    using Sig = timpl::FptrAsSig<fptr>;
-    using DecomposedMarshallSig = timpl::FptrAsSig_r<MarshallSig>;
-    return timpl::MarshallFn_impl<fptr, MarshallSig>::PackExpand(
-            typename DecomposedMarshallSig::Params(),
-            typename Sig::Params(),
-            std::make_index_sequence<Sig::ParamsLen>());
+    return timpl::MarshallFn_impl<fptr, std::is_member_pointer_v<decltype(fptr)>, MarshallSig>::ToAndFro();
+}
+
+template <typename MarshallSig, auto fptr, bool consideredAsObjectMember>
+consteval MarshallSig MarshallFn(timpl::ForwardStaticClass<fptr, consideredAsObjectMember>)
+{
+    return timpl::MarshallFn_impl<fptr, consideredAsObjectMember, MarshallSig>::ToAndFro();
 }
 
 // Converts an unnamed function pointer collection to an array of function pointers with a Marshall signature.
+// Quick conversion for custom functions not necessarily recorded with Introspective.
+// Preserves the order of the functions.
 template <typename MarshallSig, auto... fptrs>
-consteval std::array<MarshallSig, sizeof...(fptrs)> MarshalledFnsUnnamed(LitColl<fptrs...>)
+consteval auto MarshalledFnsUnnamed(LitColl<fptrs...>)
 {
-    return std::array<MarshallSig, sizeof...(fptrs)>{MarshallFn<fptrs, MarshallSig>()...};
+    return std::array<MarshallSig, sizeof...(fptrs)>{MarshallFn<MarshallSig, fptrs>()...};
 }
 
-// Converts a collection of Name-Funpointer pairs to an array of Name-Funpointer pairs with all functions in the resulting
-// array having the signature [MarshallSig].
-//
-// The [namedFptrPairs]... must be instances of the template type std::pair, the first element of the pair must
-// be a string containing the name of the function, and the second element needs to contain a value of callable type.
-template <typename MarshallSig, auto... namedFptrPairs>
-consteval std::array<std::pair<const char*, MarshallSig>, sizeof...(namedFptrPairs)>
-          MarshalledFns(LitColl<namedFptrPairs...>)
+// Takes a collection of introspective member metas and converts each of them to a function with type MarshallSig.
+// The difference between this function and the function [MarshalledFns] is that this function does not add
+// setters for object member variables, whereas the other one does.
+template <typename MarshallSig, auto... memberMetas>
+consteval auto MarshalledFnsExpanded(LitColl<memberMetas...>)
 {
-    return std::array{std::pair(namedFptrPairs.first, MarshallFn<namedFptrPairs.second, MarshallSig>())...};
+    return std::array<FnBrief<MarshallSig>, sizeof...(memberMetas)>{
+        FnBrief<MarshallSig>{ .Name = memberMetas.Name
+                            , .ArityString = memberMetas.ArityString().String
+                            , .ErasedSig = memberMetas.ErasedSig
+                            , .IsStatic = not memberMetas.IsNonStatic()
+                            , .Fn = MarshallFn<MarshallSig>(
+                                    timpl::ForwardStaticClass<memberMetas.Stencilled(), memberMetas.IsNonStatic()>{}) }... };
+}
+
+// Takes a collection of compile-time member metas from a class inheriting from Introspective, 
+// adds setters where necessary to that collection, and converts all of those functions
+// to the [MarshallSig] function signature.
+template <typename MarshallSig, auto... memberMetas>
+consteval auto MarshalledFns(LitColl<memberMetas...> l)
+{
+    constexpr auto memberSetAccessorsPredicate = []<auto meta>() consteval
+    {
+        using S = decltype(meta.Stencilled());
+        return (std::is_member_object_pointer_v<S> || (std::is_pointer_v<S> && not std::is_function_v<std::remove_pointer_t<S>>)) && (0b10u & meta.GetFlags()) == 0b10u;
+    };
+    constexpr auto memberKeepOnlyReadablesAndRestPredicate = []<auto meta>() consteval
+    {
+        using S = decltype(meta.Stencilled());
+        return not (std::is_member_object_pointer_v<S> || (std::is_pointer_v<S> && not std::is_function_v<std::remove_pointer_t<S>>)) || (0b01u & meta.GetFlags()) == 0b01u;
+    };
+    constexpr auto memberSetterMap = []<auto meta>() consteval { return timpl::MemSetPtrMeta<meta>{}; };
+
+    return MarshalledFnsExpanded<MarshallSig>(
+        l.template Filter<memberKeepOnlyReadablesAndRestPredicate>()
+         .Cat(l.template Filter<memberSetAccessorsPredicate>()
+               .template Map<memberSetterMap>())
+    );
 }
 
 // Enables the inheriting class to allow introspection into its members that have been
@@ -545,7 +785,7 @@ struct Introspective
 
     // Gets a specific recorded member by index.
     // All recorded members are enumerated from 0 onwards; if the standard compile-time macro counter is used,
-    // the members are enumerated in the order they are declared by the macros.
+    // the members are enumerated in the order they are declared in.
     // Arguments to these functions are supplied by template instances to ensure evaluation at compile time.
     template <std::size_t index, std::size_t memberLimit = IntrospectiveSettings<IntrospectiveSelf, void>::MemberLimit>
     consteval static auto GetMemberByIndex()
@@ -554,22 +794,14 @@ struct Introspective
             std::make_index_sequence<memberLimit>{});
     }
 
-    // Get all members in a LitColl<...> sequence consisting of std::pair-s, where
-    // the first element is the name of the recorded item and the second (correctly typed) element
-    // is the pointer to that member.
+    // Gets all member meta objects in one LitColl<...> object.
     consteval static auto GetMembers()
     {
-        return GetMemberNamePairs(std::make_index_sequence<GetReflectiveMemberCount()>());
-    }
-
-    template <std::size_t i>
-    consteval static auto GetPair()
-    {
-        return LitPair<decltype(GetMemberByIndex<i>())::Name, GetMemberByIndex<i>().Stencilled()>{};
+        return GetMemberMetas(std::make_index_sequence<GetReflectiveMemberCount()>());
     }
 
     // Gets a specific recorded member by name.
-    // Name type parameter has to be a instance of template 'ctstr', with appropriate stringization.
+    // Name type parameter has to be a instance of template 'CompileTimeString', with appropriate stringization.
     template <auto name, std::size_t memberLimit = IntrospectiveSettings<IntrospectiveSelf, void>::MemberLimit>
     consteval static auto GetMemberByName()
     {
@@ -593,7 +825,7 @@ struct Introspective
 // Third argument plays a key role when reflecting over template members: it controls whether the member
 // only accepts type parameters or non-type parameters; the only two possible values for the flavor
 // are 'typename' for type parameters and 'auto' for non-type parameters respectively.
-#define PlainIntrospectiveRawBoilerplate(name, StatefulCompiledCounter, templateFlavor, ...) \
+#define PlainIntrospectiveRawBoilerplate(name, StatefulCompiledCounter, templateFlavor, flags, ...) \
     template <typename DistinctIntrospectiveSelf, int loc, int dummy> \
     struct IntrospectivesChain; \
     template <int dummy> \
@@ -602,43 +834,70 @@ struct Introspective
         using TailAbove = ::introspective::timpl::RecursiveSeek_t<IntrospectiveSelf::IntrospectivesChain, IntrospectiveSelf, StatefulCompiledCounter - 1, -1, StatefulCompiledCounter>; \
         constexpr static int MilesBelow = ::introspective::timpl::MilesBelowCheck<IntrospectivesChain<IntrospectiveSelf, StatefulCompiledCounter, dummy>>::MilesBelow; \
         constexpr static bool IsFirstIntrospect = MilesBelow == 0; \
-        constexpr static char Name[] = #name; \
-        using Head = decltype(::introspective::tcstr<::introspective::Intern(Name)>()); \
+        constexpr static inline char Name[] = #name; \
+        using TypedName = decltype(::introspective::Compiled<::introspective::Intern(Name)>);\
     }; \
     template <int i, int specializationDelay> struct IntrospectivesCount; \
     template <int specializationDelay> struct IntrospectivesCount<IntrospectivesChain<IntrospectiveSelf, StatefulCompiledCounter, 0>::MilesBelow, specializationDelay>: \
         IntrospectivesChain<IntrospectiveSelf, StatefulCompiledCounter, 0> \
     { \
         friend struct Introspective<IntrospectiveSelf>; \
-        struct ObtainPtr { constexpr static char Name[] = #name; __VA_OPT__(template <templateFlavor... targs>) consteval static auto Stencilled() { \
-            return &IntrospectiveSelf::name __VA_OPT__(<targs...>); }; }; \
-        consteval static auto CollectMember() { return ObtainPtr{}; } \
+        struct IntrospectiveMemberMeta { \
+            consteval static inline unsigned char GetFlags() { return flags; } \
+            constexpr static inline char Name[] = #name; \
+            __VA_OPT__(template <templateFlavor... targs>) consteval static auto Stencilled() { \
+                return &IntrospectiveSelf::name __VA_OPT__(<targs...>); \
+            }; \
+            using TypedName = decltype(::introspective::Compiled<::introspective::Intern(Name)>); \
+            __VA_OPT__(template <templateFlavor... targs>) constexpr static inline auto ArityString() { \
+                using M = decltype(&IntrospectiveSelf::name __VA_OPT__(<targs...>)); \
+                if constexpr(::std::is_member_function_pointer_v<M> || (::std::is_pointer_v<M> && ::std::is_function_v<::std::remove_pointer_t<M>>)) { \
+                    using S = ::introspective::FptrAsSig_r<M>; \
+                    if constexpr(((::std::is_member_function_pointer_v<M> && S::Arity == 1) \
+                               || (::std::is_pointer_v<M> && ::std::is_function_v<::std::remove_pointer_t<M>> && S::Arity == 0)) \
+                              && (0b01 & GetFlags()) == 0b01) { return ::introspective::CompileTimeString<'\0'>{}; } \
+                    else { return S::template ArityString<::std::is_member_function_pointer_v<M>>(); } \
+                } else { return ::introspective::CompileTimeString<'\0'>{}; } \
+            } \
+            constexpr static inline auto ErasedSig = decltype(::introspective::Compiled<::introspective::Intern(Name)> + ArityString())::String; \
+            __VA_OPT__(template <templateFlavor... targs>) consteval static inline bool IsNonStatic() { \
+                using M = decltype(&IntrospectiveSelf::name __VA_OPT__(<targs...>)); \
+                return ::std::is_member_function_pointer_v<M> || ::std::is_member_object_pointer_v<M>; \
+            } \
+        }; \
+        consteval static auto CollectMember() { return IntrospectiveMemberMeta{}; } \
     };
 
 // Enables any class member thusly named to be reflected upon, no matter the type of the member.
-#define IntrospectiveBoilerplate(name, ...) PlainIntrospectiveRawBoilerplate(name, __LINE__, auto, __VA_ARGS__)
+// Remember though that types themselves do not have a type, they only are types.
+#define IntrospectiveBoilerplate(name, ...) PlainIntrospectiveRawBoilerplate(name, __LINE__, auto, 0b00u, __VA_ARGS__)
 
-#define FlavouredIntrospectiveBoilerplate(name, templateFlavour, ...) PlainIntrospectiveRawBoilerplate(name, __LINE__)
+#define IntrospectiveFlaggedBoilerplate(name, flags, ...) PlainIntrospectiveRawBoilerplate(name, __LINE__, auto, flags, __VA_ARGS__)
 
 // Shorthand for declaring a reflective object or instance member function.
 #define RuntimeIntrospectiveObjectFn(name, ...) IntrospectiveBoilerplate(name, __VA_ARGS__); __VA_OPT__(template <) __VA_ARGS__ __VA_OPT__(>) auto name
+#define RuntimeIntrospectiveObjectGetter(name, ...) IntrospectiveFlaggedBoilerplate(name, 0b01, __VA_ARGS__); __VA_OPT__(template <) __VA_ARGS__ __VA_OPT__(>) auto name
 
 // Shorthand for declaring a reflective static member function.
 #define RuntimeIntrospectiveStaticFn(name, ...) IntrospectiveBoilerplate(name, __VA_ARGS__); __VA_OPT__(template <) __VA_ARGS__ __VA_OPT__(>) static auto name
+#define RuntimeIntrospectiveStaticGetter(name, ...) IntrospectiveFlaggedBoilerplate(name, 0b01, __VA_ARGS__); __VA_OPT__(template <) __VA_ARGS__ __VA_OPT__(>) static auto name
 
-// Shorthand for declaring a member of any kind, except types.
-#define TypedIntrospectiveMember(types, name, ...) IntrospectiveBoilerplate(name, __VA_ARGS__); __VA_OPT__(template <) __VA_ARGS__ __VA_OPT__(>) types name
+// Shorthand for declaring a function of any kind.
+#define TypedIntrospectiveFn(types, name, ...) IntrospectiveBoilerplate(name, __VA_ARGS__); __VA_OPT__(template <) __VA_ARGS__ __VA_OPT__(>) types name
+
+// Macros for declaring non-constexpr (possibly static) member variables and their intent to allow read and write access through reflection.
+// The old version simply looked to much like a member function declaration.
+#define TypedIntrospectiveValueReadonly(typed, name)  typed name; IntrospectiveFlaggedBoilerplate(name, 0b01u);
+#define TypedIntrospectiveValueWriteonly(typed, name) typed name; IntrospectiveFlaggedBoilerplate(name, 0b10u);
+#define TypedIntrospectiveValueReadWrite(typed, name) typed name; IntrospectiveFlaggedBoilerplate(name, 0b11u);
 
 // Shorthand for declaring a constexpr constant.
-#define ConstexprIntrospectiveValue(name, ...) IntrospectiveBoilerplate(name, __VA_ARGS__); \
+#define ConstexprIntrospectiveValue(name, ...) IntrospectiveFlaggedBoilerplate(name, 0b01, __VA_ARGS__); \
     __VA_OPT__(template <) __VA_ARGS__ __VA_OPT__(>) constexpr static inline auto name
 
 // Shorthand for declaring a constinit constant.
-#define ConstinitIntrospectiveValue(name, ...) IntrospectiveBoilerplate(name, __VA_ARGS__); \
+#define ConstinitIntrospectiveValue(name, ...) IntrospectiveFlaggedBoilerplate(name, 0b01, __VA_ARGS__); \
     __VA_OPT__(template <) __VA_ARGS__ __VA_OPT__(>) constinit static inline auto name
-
-// Shorthand for declaring a reflective member variable of any kind.
-#define RuntimeIntrospectiveValue(name) name; IntrospectiveBoilerplate(name);
 
 private:
 
@@ -667,23 +926,22 @@ private:
     {
         template <typename Meta> consteval bool operator()(Meta) const
         {
-            if constexpr(name.Length != Meta::Head::Length) { return false; }
+            if constexpr(name.Len != Meta::Typed::Len) { return false; }
             else
             {
-                for(std::size_t i = 0; i < name.Length; ++i)
+                for(std::size_t i = 0; i < name.Len; ++i)
                 {
-                    if(name.String[i] != Meta::Head::String[i]) { return false; }
+                    if(name.String[i] != Meta::Name.c[i]) { return false; }
                 }
                 return true;
             }
         }
     };
 
-
     template <std::size_t... haystack>
-    consteval static auto GetMemberNamePairs(std::index_sequence<haystack...>)
+    consteval static auto GetMemberMetas(std::index_sequence<haystack...>)
     {
-        return LitColl<GetPair<haystack>()...>{};
+        return LitColl<GetMemberByIndex<haystack>()...>{};
     }
 
     template <std::size_t i, auto predicate>
@@ -694,7 +952,7 @@ private:
         using This   = FoldGenericFind<i, predicate>;
         using Result = typename timpl::IsCountInstantiable_f<IntrospectiveSelf::template IntrospectivesCount, i, std::nullptr_t>::Type;
 
-        // Used in place of ObtainPtr when no such member can be found
+        // Used in place of IntrospectiveMemberMeta when no such member can be found
         struct MemberFail
         {
             consteval MemberFail() = default;

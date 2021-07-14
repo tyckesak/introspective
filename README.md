@@ -30,7 +30,7 @@ struct Reflective: Introspective<Reflective>
 {
 
     // Declaring and defining functions with the supplied macros might seem
-    // a little daunting at first.
+    // a little odd at first.
     RuntimeIntrospectiveStaticFn(add) (int x, int y) -> int { return x + y; }
     
     // It does not look a lot like C++, I agree.
@@ -54,16 +54,17 @@ struct Reflective: Introspective<Reflective>
     RuntimeIntrospectiveObjectFn(mul) (double y) { return value * y; }
     
     // We might record a instance variable just as easily.
-    // This style is certainly not ideal, since it looks like declaring
-    // a member function. You may remap the macros of course.
-    std::string RuntimeIntrospectiveValue(strung);
+    TypedIntrospectiveValueReadWrite(std::string, strung);
+    // This macro generates getters and setters when used with the scripting bridge,
+    // more on that further down.
+    
     
     // The macro definitions themselves are not really complicated; they all rely on one
     // macro to do the heavy lifting.
 };
 
 // The definition of the function already declared requires
-// no reflection magic; these two are separate.
+// no reflection magic; the reflection is already behind us.
 double Reflective::div(double x, double y) { return x / y; }
 
 ```
@@ -89,7 +90,7 @@ int main()
     // The local variable above might have been annotated with 'auto' as well,
     // the deduced type would have still been the same!
 
-    // Prints 17.
+    // Guess what 9 + 8 is.
     std::cout << addAddress(9, 8) << std::endl;
 
     // Just underneath the definition of the add function there is pie.
@@ -119,9 +120,8 @@ int main()
 }
 ```
 
-Gets members even by name, although admittedly with much clunkier syntax than I could
-have ever anticipated. If someone has a way to make this easier without
-macros, please feel free to contribute!
+Gets members even by name, although admittedly with a little clunkier syntax.
+If someone has a way to make this easier without macros, please feel free to contribute!
 
 ```c++
 int main()
@@ -133,7 +133,7 @@ int main()
     // storing a constexpr static character array somewhere else.
     constexpr static char queryName[] = "sub";
 
-    auto subRef = Reflective::GetMemberByName<tcstr<Intern(queryName)>()>()
+    auto subRef = Reflective::GetMemberByName<Compiled<Intern(queryName)>>()
                              .Stencilled();
     std::cout << subRef(5, 8) << std::endl;
 }
@@ -184,10 +184,13 @@ static member functions of the template type instance `introspective::ArgsMarsha
 This template is meant to be specialised for your `MarshallSig` and any specialisation
 needs to provide following function template definitions:
 
-* `template <typename Data> static auto FromEmbedded(MarshallArgs..., std::size_t where)`. Extracts 
+* `template <bool isStaticCall, typename Data> static auto FromEmbedded(MarshallArgs..., std::size_t where)`. Extracts 
   one value of type `Data` through the facilities exposed in `MarshallArgs...`, and returns that value.
   Whether you return a `Data` value by copy, by reference or `const`-qualified is your choice; the
   only thing this function template needs to satisfy are the needs of the wrapped functions.
+  The `isStaticCall` flag indicates whether the embedded script is trying to call
+  a static function or an instance function (some scripting languages make an explicit
+  difference between those two).
   
 This function is always invoked when the scripting language wants to make a call to the wrapped function.
 `where` tells the position of the argument it needs to be in for the call to the wrapped function
@@ -205,7 +208,7 @@ no data to marshall back. `«Return Type»` needs to be the same type as the ret
 * `static «Return Type» ToEmbedded(MarshallArgs...)`. Same as the other overload of `ToEmbedded`, except
   that this overload is called when the wrapped function returns `void`.
 
-* `template <typename... DataArgTypes> static bool PrepareExtraction(MarshallArgs...)`. Called to
+* `template <bool isStaticCall, typename... DataArgTypes> static bool PrepareExtraction(MarshallArgs...)`. Called to
   inform the `MarshallArgs...` to prepare for extraction of `DataArgTypes...` in that specific order.
   Returns a bool indicating the readiness and the ability to extract these arguments. This function
   exists to enable restrictions on types that may be marshalled and to make type checking on the
@@ -215,26 +218,21 @@ no data to marshall back. `«Return Type»` needs to be the same type as the ret
   As above, `«Return Type»` needs to be the same type as the return type in `MarshallSig`. The value
   returned from this function will be the value returned from the wrapper function.
   
-Once such a specialisation has been written, all you need to do is
+Once such a specialisation has been written, all that's left to do to get the desired functions is
 
 ```c++
 // The returned value is a std::array, and its length depends on the number of members declared with
 // the Introspective macros.
-constexpr auto scriptReadyFnArray = introspective::MarshalledFns(«Introspective Type»::GetMembers());
+constexpr auto scriptReadyFnArray = introspective::MarshalledFns<MarshallSig>(«Introspective Type»::GetMembers());
 ```
 
-That array will contain `std::pair<const char*, MarshallSig>` elements, where the first element in such a 
+That array will contain `introspective::FnBrief<MarshallSig>` elements, where the first element in such a 
 pair is the name of the wrapped function and the second element is a pointer to a function with signature
 `MarshallSig` which automatically converts arguments that are provided inside the embedded scripting language
 to C++ arguments and feeds them to the wrapped function in the correct order, using the five functions
 described above.
 
-Though, for this to work, you may not mark any constants or variables as reflective - only functions. Whether
-the functions are static or instance functions does not matter. In the case of instance functions however,
-the `this` object must be passed along explicitly as the first argument by the marshall and as a `(const) &`
-reference, depending on whether the instance member function itself is const-qualified or not.
-
-Look at the provided Lua example for more details.
+Take a look at the examples for more details.
 
 ## Additional member detection in classes
 
@@ -274,10 +272,10 @@ with that or the previous revision:
 
 * `__VA_OPT__`
 * Structural types as non-type template parameters
-* ~~Lambda literals in unevaluated contexts~~
+* Lambda literals in unevaluated contexts
 * Default-constructible lambda types where their closure is equal to
   itself.
-* `consteval` for making sure none of the reflection algorithms leak
+* `consteval` for making sure none of the reflection algorithms spill
   over into the runtime.
 * Fold expressions for variadic template arguments (might have been
   already introduced with C++17, mentioned for the sake of
