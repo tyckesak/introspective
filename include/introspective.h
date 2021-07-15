@@ -18,6 +18,9 @@
 
 */
 
+#ifndef IntrospectiveHeaderFileIncludeGuard
+#define IntrospectiveHeaderFileIncludeGuard
+
 #include <array>
 #include <utility>
 #include <algorithm>
@@ -198,8 +201,6 @@ struct InternedString {
 // Records a string of characters as a type.
 // Cannot accept string literals as template argument, neither directly
 // nor indirectly through functions.
-//
-// Name is shorthand for 'Compile Time String'
 template <char... cs> struct CompileTimeString
 {
     constexpr static inline char String[sizeof...(cs)] = {cs...};
@@ -992,8 +993,8 @@ private:
     {
         return decltype((FoldGenericFind<haystack, predicate>{}, ...))::Index;
     }
-
 };
-
 }
+#endif
+// Phew. Exactly a thousand line long file.
 
