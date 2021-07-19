@@ -28,39 +28,32 @@ using namespace introspective;
 
 struct Reflective: Introspective<Reflective>
 {
-
     // Declaring and defining functions with the supplied macros might seem
     // a little odd at first.
-    RuntimeIntrospectiveStaticFn(add) (int x, int y) -> int { return x + y; }
+    FnDecl(add, (int x, int y) -> int) { return x + y; }
     
     // It does not look a lot like C++, I agree.
-    ConstexprIntrospectiveValue(Pie) = 3.14;
+    MemDecl(static constexpr Pie, double) = 3.14;
     
-    // What the macro needs is the name of the declaration, nothing else.
-    // Type inference can do the rest for us.
-    RuntimeIntrospectiveStaticFn(sub) (double x, double y) -> double { return x - y; }
+    // What the macro needs is the name of the declaration and its (function) type, nothing else.
+    FnDecl(sub, (double x, double y) -> double) { return x - y; }
     
     // Declare it, but define it somewhere else. It can wait.
-    RuntimeIntrospectiveStaticFn(div) (double x, double y) -> double;
+    FnDecl(virtual div, (double x, double y) -> double);
+    
+    // We might record a instance variable just as easily.
+    MemDecl(strung, std::string);
     
     // Say we had a object variable that we do not want recorded.
     // Just leave out the macro then.
     double value;
     
     // Instance member functions are just another declaration in the
-    // eyes of reflection. Return types are deduced from context (except for clang,
-    // which refuses to accept functions with deduced return types that are declared
-    // in this way)
-    RuntimeIntrospectiveObjectFn(mul) (double y) { return value * y; }
+    // eyes of reflection.
+    FnDecl(virtual mul, (double y) -> double) { return value * y; }
     
-    // We might record a instance variable just as easily.
-    TypedIntrospectiveValueReadWrite(std::string, strung);
-    // This macro generates getters and setters when used with the scripting bridge,
-    // more on that further down.
-    
-    
-    // The macro definitions themselves are not really complicated; they all rely on one
-    // macro to do the heavy lifting.
+    // Overloads? No problem.
+    FnDecl(mul, (int y) -> double) { return 2 * value * y; }
 };
 
 // The definition of the function already declared requires
@@ -139,18 +132,23 @@ int main()
 }
 ```
 
-Reflective template members are also supported, under the condition that all
-template parameters are declared as non-type template parameters.
-Template parameters have space in the back as varargs to the macro invocation.
-The syntax also supports default template arguments; watch out for eventual commas
-that require to be escaped inside the macro invocation.
+Reflective template members? You got it. Even C++20-ready!
 
 ```c++
+#include <concepts>
+
 struct Templatte: Introspective<Templatte>
 {
-    RuntimeIntrospectiveStaticFn(Lattemp, int x, int y, int z = 5) (double a)
+    // Mark non-type template parameters always with 'auto'.
+    // You can check the type of the parameter in the 'requires'-clause without worries.
+    FnDecl(static Lattemp, template(auto x, auto y, auto default(5) z), (double a) -> double)
     {
         return x - y + z * a;
+    }
+    
+    FnDecl(static LatteMacchiate, template(typename default(int) A), requires(std::integral<A>), (A a) -> decltype(12 * a))
+    {
+        return 12 * a;
     }
 };
 

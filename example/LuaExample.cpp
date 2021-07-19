@@ -33,14 +33,21 @@
 
 struct LuaObject: introspective::Introspective<LuaObject>
 {
-    TypedIntrospectiveValueReadonly(int, integer);
+    // The 'MemDecl' macro expands to «type» «name», plus some other
+    // reflection boilerplate.
+    // The 'Readonly' bit at the end of the macro name tells the scripting
+    // bridge that we only want to generate a getter function for it and
+    // no setter.
+    MemDeclReadonly(integer, int);
     double frac;
 
     // This member functions does not mutate state, const-qualify it.
-    RuntimeIntrospectiveObjectFn(GetInteger) () -> int const { return integer; }
+    FnDecl(GetInteger, () -> int const) { return integer; }
 
-    TypedIntrospectiveValueReadWrite(static double, pi);
-    RuntimeIntrospectiveStaticFn(StaticFunction) (int i) -> double { return 3.14 * i; }
+    // Any static members only need to be decorated as 'static'. That's it.
+    MemDeclReadwrite(static pi, double);
+
+    FnDecl(static StaticFunction, (int i) -> double) { return 3.14 * i; }
 };
 
 double LuaObject::pi = 3.14;

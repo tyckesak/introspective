@@ -72,14 +72,22 @@ struct WrenObject: introspective::Introspective<WrenObject>
     // These expand to the declaration [type] [name]; plus some other reflection
     // template boilerplate at the end, which only depends on the name of the
     // member variable.
-    TypedIntrospectiveValueReadWrite(int, integer);
-    TypedIntrospectiveValueReadWrite(double, frac);
-    TypedIntrospectiveValueReadWrite(std::string, strung);
+    // The 'Readwrite' bit at the end makes the scripting bridge generate compatible
+    // signature strings with Wren.
+    MemDeclReadwrite(integer, int);
+    MemDeclReadwrite(frac, double);
+    MemDeclReadwrite(strung, std::string);
 
     // This member function does not mutate any state; const-qualify it.
-    RuntimeIntrospectiveObjectFn(Mult) () -> double const { return integer * frac; }
+    FnDecl(Mult, () -> double const) { return integer * frac; }
 
-    RuntimeIntrospectiveStaticFn(StaticFunction) (int i) -> double { return 3.14 * i; }
+    // A static function only needs to be decorated with 'static'. That's it.
+    FnDecl(static StaticFunction, (int i) -> double) { return 3.14 * i; }
+
+    // Overloads are not a problem. The only thing you have to look out for here are the
+    // usual overloading rules of C++. FnDecl won't get in your way.
+    FnDecl(Mult, (int i) -> double const) { return i * frac; }
+
 };
 // That's it! No bookkeeping, no keeping track of lists of methods, no manual conversions
 // of arguments from Wren to C++ and back in the bodies, automatic getters and setters!
@@ -211,11 +219,12 @@ WrenForeignMethodFn MethodIntegration(WrenVM* vm, const char* _module, const cha
     if(className == "WrenObject")
     {
         // This array will contain exactly eight members, three getters and setters each,
-        // one object member function and one static member function.
+        // one overloaded object member function and one static member function.
         // Typing 'auto' instead of this long type will also be sufficient.
-        constexpr std::array<introspective::FnBrief<WrenForeignMethodFn>, 8> wrenObjectMems
+        constexpr std::array<introspective::FnBrief<WrenForeignMethodFn>, 9> wrenObjectMems
             = introspective::MarshalledFns<WrenForeignMethodFn>(WrenObject::GetMembers());
-
+        
+        // The order of the declarations is preserved.
         for(const auto& briefs: wrenObjectMems)
         {
             // It can't get any easier than this!
