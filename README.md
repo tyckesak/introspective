@@ -1,186 +1,87 @@
 # Introspective
 
-Some quotes from StackOverflow regarding reflection in C++:
-
-*"Inspection by iterating over members of a type, enumerating its methods and so on. This is not possible with C++."*
-
-*"You can't iterate over the member functions of a class for example."*
-
-You can. Sort of.
-
-Well, there's obviously more to it than that.
-
-Introspective is a header file that makes good use of template capabilities and allows
-new classes to selectively open up some or all of their members to reflection, regardless of
-whether the inspected member is a constant, a static variable or a instance member function. It records
-their (function) types and addresses and passes them along unchanged during compile-time, with the ultimate
+Introspective is a header file that brings reflection to any class that wants it, regardless of
+whether the reflected member is a constant, a static variable or a instance member function. It records
+declaration order, (function) type and address and passes them along unchanged during compile-time, with the ultimate
 goal of making the interaction with embedded scripting languages like Lua a little less of a hassle.
 
 ## Compile-time reflection
 
-Let's take a tour.
+Let's do this. *cracks knuckles*
 
 ```c++
+
 #include <string>
+#include <concepts>
+#include <iostream>
 #include <introspective.h>
 
 using namespace introspective;
 
 struct Reflective: Introspective<Reflective>
 {
-    // Declaring and defining functions with the supplied macros might seem
-    // a little odd at first.
-    FnDecl(add, (int x, int y) -> int) { return x + y; }
-    
-    // It does not look a lot like C++, I agree.
-    MemDecl(static constexpr Pie, double) = 3.14;
-    
-    // What the macro needs is the name of the declaration and its (function) type, nothing else.
-    FnDecl(sub, (double x, double y) -> double) { return x - y; }
-    
-    // Declare it, but define it somewhere else. It can wait.
-    FnDecl(virtual div, (double x, double y) -> double);
-    
-    // We might record a instance variable just as easily.
+    MemDecl(static constexpr Pie, const double) = 3.14;
     MemDecl(strung, std::string);
-    
-    // Say we had a object variable that we do not want recorded.
-    // Just leave out the macro then.
     double value;
     
-    // Instance member functions are just another declaration in the
-    // eyes of reflection.
-    FnDecl(virtual mul, (double y) -> double) { return value * y; }
+    // Your standard run-of-the-mill functions
+    FnDecl(add, (int x,    int y)    -> int   ) { return x + y; }
+    FnDecl(sub, (double x, double y) -> double) { return x - y; }
     
-    // Overloads? No problem.
-    FnDecl(mul, (int y) -> double) { return 2 * value * y; }
+    // Overloads, you say? No problem.
+    FnDecl(virtual mul, (double y)           -> double) { return value * y; }
+    FnDecl(virtual mul, (int y)              -> double) { return 2 * value * y; }
+    FnDecl(static  div, (double x, double y) -> double);  // for later...
+    
+    // Template member functions. C++-20 ready!
+    FnDecl(constexpr TemplattedDiv,
+           template(auto x, auto y), 
+           requires(std::integral<decltype(x)> && std::integral<decltype(y)>),
+           () -> decltype(x / y))
+    {
+        return x / y;
+    }
+
+    Reflective(std::string str, double val): strung(str), value(val) {}
 };
 
-// The definition of the function already declared requires
-// no reflection magic; the reflection is already behind us.
-double Reflective::div(double x, double y) { return x / y; }
-
-```
-
-Although it tries to offload the burden of reflection to template metaprogramming as much as possible,
-the fact remains that templates are not known for being concise. That is why Introspective employs macros
-to dress the reflected members like some version of C++ one could reason with just by looking at it,
-while staying faithful to C++ idioms.
-
-How bad can the interface to this be, one might wonder.
-
-```c++
-#include <iostream>
+double Reflective::div(double x, double y) { return x / y; }  // Define later!
 
 int main()
 {
-    // Get the address of the first member that has been indexed
-    // in the definition of the Reflective struct. It is a
-    // static function taking two integers.
-    // No casting of any kind necessary.
-    int (* addAddress)(int, int) = Reflective::GetMemberByIndex<0>().Stencilled();
+    // Declaration order is preserved in the indices.
+    constexpr auto addFnPtr         = Reflective::GetMemberByIndex<2>().Stencilled();
+    constexpr auto overloadedMulPtr = Reflective::GetMemberByIndex<4>().Stencilled();
+    constexpr auto templattedPtr    = Reflective::GetMemberByIndex<Reflective::GetReflectiveMemberCount() - 1>()
+                                                 .template Stencilled<265, 5>();
+    Reflective refl{ "Hello World!", 2.71 };
+    std::cout << (refl.*addFnPtr)(5, 7)  << (refl.*overloadedMulPtr)(Reflective::Pie)
+              << (refl.*templattedPtr)() << std::endl;
+
+    // Compile-time list of all "member metas", objects on which you may call .Stencilled()
+    // to get the final pointer/pointer-to-member.
+    constexpr auto allTheMembers = Reflective::GetMembers();
     
-    // The local variable above might have been annotated with 'auto' as well,
-    // the deduced type would have still been the same!
-
-    // Guess what 9 + 8 is.
-    std::cout << addAddress(9, 8) << std::endl;
-
-    // Just underneath the definition of the add function there is pie.
-    const double* pieAddress = Reflective::GetMemberByIndex<1>().Stencilled();
-
-    // Get the address of div, the function split into declaration and definition.
-    double (* divAddress)(double, double) = Reflective::GetMemberByIndex<3>().Stencilled();
-    std::cout << divAddress(1.0, *pieAddress) << std::endl;
-}
-```
-
-Handles object member functions and variables just as well.
-
-```c++
-int main()
-{
-    // Aggregate initialization rules are respected, if applicable.
-    Reflective t{ .value = 2.71, .strung = "Lorem ipsum" };
-
-    std::string Reflective::* strungAddress =
-        t.GetMemberByIndex<Reflective::GetReflectiveMemberCount() - 1>()
-         .Stencilled();
-    double (Reflective::* mulAddress)(double) = t.GetMemberByIndex<4>().Stencilled();
-
-    std::cout << (t.*mulAddress)(Reflective::Pie) << std::endl;
-    std::cout << t.*strungAddress << std::endl;
-}
-```
-
-Gets members even by name, although admittedly with a little clunkier syntax.
-If someone has a way to make this easier without macros, please feel free to contribute!
-
-```c++
-int main()
-{
-    using namespace introspective;
-
-    // String literals may not under any circumstances be used as arguments
-    // to templates, directly or indirectly. One can get around this by
-    // storing a constexpr static character array somewhere else.
-    constexpr static char queryName[] = "sub";
-
-    auto subRef = Reflective::GetMemberByName<Compiled<Intern(queryName)>>()
-                             .Stencilled();
-    std::cout << subRef(5, 8) << std::endl;
-}
-```
-
-Reflective template members? You got it. Even C++20-ready!
-
-```c++
-#include <concepts>
-
-struct Templatte: Introspective<Templatte>
-{
-    // Mark non-type template parameters always with 'auto'.
-    // You can check the type of the parameter in the 'requires'-clause without worries.
-    FnDecl(static Lattemp, template(auto x, auto y, auto default(5) z), (double a) -> double)
-    {
-        return x - y + z * a;
-    }
+    // Ready-to-use lua_CFunctions for Lua scripting, fresh from the oven!
+    constexpr auto luaReadyFns = introspective::MarshalledFns<lua_CFunction>(allTheMembers);
     
-    FnDecl(static LatteMacchiate, template(typename default(int) A), requires(std::integral<A>), (A a) -> decltype(12 * a))
+    for(auto briefs: luaReadyFns)
     {
-        return 12 * a;
+        std::cout << briefs.Name << "; " << briefs.ErasedSig
+                  <<      " at address " << briefs.Fn        << std::endl;
+        lua_CFunction f = briefs.Fn;  // Typechecks!
     }
-};
-
-int main()
-{
-    // Observe where the template arguments went.
-    double (* generic)(double) = Templatte::GetMemberByIndex<0>()
-                                           .Stencilled<5, 6, 7>();
-    std::cout << generic(3.14) << std::endl;
 }
+
+// Check out the examples, it demonstrates integration with C++ (multiple) inheritance
+// and how to transfer recorded functions automatically to Lua!
 ```
 
 ## Interaction with scripting languages
 
-Having the ability to let the compiler generate a list of selected functions along with their
-names and signatures gives us the opportunity to "wrap" every function
-in that list inside another new function with some specific signature. One particularly popular signature
-in the realm of embedded scripting is `typedef int (* lua_CFunction)(lua_State* L)`. The Lua
-virtual machine encapsulated in `L` is perfectly capable of indirectly providing the functions
-in the compile-time list with some arguments of their own; the only thing missing is a bridge that
-marshalls the necessary data in each direction.
-
-Let `MarshallSig` be the function pointer signature type to wrap each function in; in the case of a marshalling bridge
-to Lua, it would be the function pointer type `int(*)(lua_State*)`, aka `lua_CFunction`. Let also
-`MarshallArgs...` be the list of parameter types in `MarshallSig`; it may contain more than one
-type (or even zero, but that would make marshalling pointless). In the example above, `MarshallArgs...` would
-contain the pointer type `lua_State*` as its only element.
-
-Automatic conversion of functions to functions with signature `MarshallSig` is done using
-static member functions of the template type instance `introspective::ArgsMarshalling<MarshallSig>`.
-This template is meant to be specialised for your `MarshallSig` and any specialisation
-needs to provide following function template definitions:
+If you can't find your language in the examples, don't worry: this header is scripting-language agnostic and
+can be made to work with any one that is written in C. The specifications for the marshalling interface that you need
+to build are listed here:
 
 * `template <bool isStaticCall, typename Data> static auto FromEmbedded(MarshallArgs..., std::size_t where)`. Extracts 
   one value of type `Data` through the facilities exposed in `MarshallArgs...`, and returns that value.
@@ -271,6 +172,7 @@ with that or the previous revision:
 * `__VA_OPT__`
 * Structural types as non-type template parameters
 * Lambda literals in unevaluated contexts
+* Concepts for a little better error tracing.
 * Default-constructible lambda types where their closure is equal to
   itself.
 * `consteval` for making sure none of the reflection algorithms spill

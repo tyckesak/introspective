@@ -79,14 +79,14 @@ struct WrenObject: introspective::Introspective<WrenObject>
     MemDeclReadwrite(strung, std::string);
 
     // This member function does not mutate any state; const-qualify it.
-    FnDecl(Mult, () -> double const) { return integer * frac; }
+    FnDecl(Mult, () const -> double) { return integer * frac; }
 
     // A static function only needs to be decorated with 'static'. That's it.
     FnDecl(static StaticFunction, (int i) -> double) { return 3.14 * i; }
 
     // Overloads are not a problem. The only thing you have to look out for here are the
     // usual overloading rules of C++. FnDecl won't get in your way.
-    FnDecl(Mult, (int i) -> double const) { return i * frac; }
+    FnDecl(Mult, (int i) const -> double) { return i * frac; }
 
 };
 // That's it! No bookkeeping, no keeping track of lists of methods, no manual conversions
@@ -218,7 +218,7 @@ WrenForeignMethodFn MethodIntegration(WrenVM* vm, const char* _module, const cha
 
     if(className == "WrenObject")
     {
-        // This array will contain exactly eight members, three getters and setters each,
+        // This array will contain exactly nine members, three getters and setters each,
         // one overloaded object member function and one static member function.
         // Typing 'auto' instead of this long type will also be sufficient.
         constexpr std::array<introspective::FnBrief<WrenForeignMethodFn>, 9> wrenObjectMems

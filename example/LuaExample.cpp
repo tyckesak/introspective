@@ -31,7 +31,27 @@
 
 #include "../include/introspective.h"
 
-struct LuaObject: introspective::Introspective<LuaObject>
+struct Base1: introspective::Introspective<Base1>
+{
+    Base1(int i) { std::cout << "Base1 says " << i << std::endl; }
+    FnDecl(static BaseFunction1, (double x, double y, double z) -> double) { return x * y / z; }
+};
+
+struct Base2: introspective::Introspective<Base2>
+{
+    Base2(std::string p) { std::cout << "Base2 says " << p << std::endl; }
+    // Functions can be passed on to deriving classes!
+    FnDecl(static BaseFunction2, (double x, double y, double z) -> double) { return x / y + z; }
+};
+
+struct LuaObject: introspective::Introspective<LuaObject
+#   if defined(__clang__) || !defined(__GNUG__)
+    // These are base classes to the LuaObject. They come after the LuaObject template argument
+    // to the Introspective<...> template class.
+    , Base1
+    , Base2
+#   endif
+>
 {
     // The 'MemDecl' macro expands to «type» «name», plus some other
     // reflection boilerplate.
@@ -41,8 +61,18 @@ struct LuaObject: introspective::Introspective<LuaObject>
     MemDeclReadonly(integer, int);
     double frac;
 
+    LuaObject(int integer, double frac):
+#   if defined(__clang__) || !defined(__GNUG__)
+        // The base constructors are called by passing rvalue references
+        // to already constructed base objects. These objects will then be moved
+        // into the super constructors.
+        Introspective(Base1(2), Base2("Hello!")), 
+#   endif
+        integer(integer), frac(frac)
+    {}
+
     // This member functions does not mutate state, const-qualify it.
-    FnDecl(GetInteger, () -> int const) { return integer; }
+    FnDecl(GetInteger, () const -> int) { return integer; }
 
     // Any static members only need to be decorated as 'static'. That's it.
     MemDeclReadwrite(static pi, double);
@@ -172,12 +202,18 @@ struct introspective::ArgsMarshalling<lua_CFunction>  // lua_CFunction, aka int(
 
 };
 
+#if defined(__clang__) || !defined(__GNUG__)
+#define LuaWrappedFunctionsLen 7
+#else
+#define LuaWrappedFunctionsLen 5
+#endif
+
 int main()
 {
-    // Since we declared three introspective members in [LuaObject], this
-    // compile-time array will have 5 elements. Note that a read-write
-    // property provides two members, one getter and one setter.
-    constexpr std::array<introspective::FnBrief<lua_CFunction>, 5> luaReady
+    // Depending on which compiler you are using, this compile time std::array will have a different
+    // number of elements. Clang (and maybe others, I don't know) can handle the inheritance scheme,
+    // G++ can't; and so we are left with seven and five reflective members respectively.
+    constexpr std::array<introspective::FnBrief<lua_CFunction>, LuaWrappedFunctionsLen> luaReady
         = introspective::MarshalledFns<lua_CFunction>(LuaObject::GetMembers());
 
     lua_State* L = luaL_newstate();
@@ -186,6 +222,7 @@ int main()
     std::vector<luaL_Reg> luaFns;
     for (auto briefs: luaReady)
     {
+        std::cout << briefs.ErasedSig << std::endl;
         // The name is the first element, the lua_CFunction goes second.
         luaFns.push_back(luaL_Reg{ briefs.Name, briefs.Fn });
     }
@@ -203,7 +240,7 @@ int main()
     lua_getglobal(L, "integer");
     // Creates a new Lua userdata object, initialize it in-place with
     // a constructor from [LuaObject] and push that object immediately to the Lua stack.
-    new (lua_newuserdatauv(L, sizeof(LuaObject), 1)) LuaObject{ .integer = 123, .frac = 2.71 };
+    new (lua_newuserdatauv(L, sizeof(LuaObject), 1)) LuaObject{ 123, 2.71 };
     // The only thing left for us to do is to call the function!
     lua_call(L, 1, 1);
     // Notice that the LuaObject existed only on the stack and has been consumed.

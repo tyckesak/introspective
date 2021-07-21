@@ -21,388 +21,9 @@
 #ifndef IntrospectiveHeaderFileIncludeGuard
 #define IntrospectiveHeaderFileIncludeGuard
 
-// Returns a constant bool if given type contains some named member variable or member function.
-// Works with template types and arguments, too.
-// Varargs are the parameter types of the function, if the member in question happens to be a function. For functions
-// with arity 0 one need not provide any varargs.
-#define HasMember(InType, member, ...) (::introspective::ArbitraryDetection::CheckInstantiable<InType __VA_OPT__(,__VA_ARGS__)>(SemanticsMember(member)))
-
-// Returns stateless lambda yielding a pointer to given member of given type, or nullptr if no such member exists.
-// Varargs are the parameter types of the function, if the member in question happens to be a function. For functions
-// with arity 0 one need not provide any varargs.
-#define ConservedMember(InType, member, ...) (::introspective::ArbitraryDetection::ConservedInstance<InType __VA_OPT__(,__VA_ARGS__)>(SemanticsMember(member)))
-
-// Returns a stateless function acting as middleman between the caller and the constructor of a local type 'Inner'
-// inside type 'Outer'. The local type needs to inherit from a known type 'AsType', which - upon invocation of the
-// returned lambda - will be converted to the known type.
-// The new object is placed on the heap with operator new.
-// Varargs are the parameter types of the constructor in question.
-#define GetLocalTypeConstructor(Outer, Inner, AsType, ...) (::introspective::ArbitraryDetection::GetInstance<Outer, ::std::add_pointer_t<::std::add_pointer_t<AsType>(__VA_ARGS__)> ,##__VA_ARGS__ >(SemanticsLocalType(Inner __VA_OPT__(,__VA_ARGS__))))
-
-// Returns a pointer to a static member variable of some given type or a function pointer to a static member
-// function of some given type, or nullptr if no such member exists.
-// The member needs to be convertible to the given type, or - in the case of a function - the argument and
-// the return types must match insofar as to be convertible to each respective other.
-#define GetStaticMember(InType, member, MemberType, ...) (::introspective::ArbitraryDetection::GetInstance<InType, ::std::add_pointer_t<MemberType>>(SemanticsMember(member)))
-
-// Same as macro GetStaticMember, except that it enforces const on the given type.
-#define GetStaticConstant(InType, member, MemberType) (::introspective::ArbitraryDetection::GetInstance<InType, ::std::add_pointer_t<::std::add_const_t<MemberType>>>(SemanticsMember(member)))
-
-// Returns a pointer to member to a member variable.
-// This one is a little tricky; play around with the types a little bit. I have not seen
-// a lot of pointer-to-member types in the wild, but it's there for those who need it.
-// Some advice: take note and observe how pointer-to-member types interact with classes from the
-// standard library - say, std::function.
-#define GetObjectMember(InType, member, MemberType) (::introspective::ArbitraryDetection::GetInstance<InType, MemberType InType::*>(SemanticsMember(member)))
-
-// Declare a function in the current class namespace. The definition of this function may be provided inline.
-//  - name: The name of the function as a literal, not enclosed in quotes.
-//          May be preceded by the literals: virtual, static, constexpr, inline, thread_local, extern
-//  
-//  - ... : Template signature, C++20 requires clause, or function type declaration, in any order. A function type must be present, all else is optional.
-//          For declaring a template, use this syntax:
-//                 + template<  « ... »  >               --->     template(  « ... »  )      (Enclose template parameters in normal parentheses, not in angle brackets. Same goes for
-//                                                                                            template template parameters)
-//
-//                 + typename A = void                   --->     typename default(void) A   (Enclose default arguments in a "call" to 'default', default(...) needs to precede
-//                                                                                            the parameter name. Same goes for non-type parameters.
-//                                                                                            Template template default arguments are not supported yet)
-//
-//                 + int Val = 3                         --->     auto default(3) Val        (Only use 'auto' for specifying non-type template parameters.
-//                                                                                            You have ample opportunity to check the non-type parameter's type
-//                                                                                            in the requires clause)
-//
-//                 + typename = std::enable_if< «...» >  --->     typename default(std::enable_if< «...» >) 
-//                                                                                           (Use angle brackets when inside default parentheses as you
-//                                                                                            normally would for specifying arguments to templates)
-//          For declaring a requires clause, use this syntax:
-//                 + requires  « ... »         --->     requires(  « ... »  )      (Enclose requires clause in normal parentheses. Use normal C++ syntax inside them, including
-//                                                                                  angle brackets for templates, as you would anywhere else)
-//          For declaring a function type, use this syntax:
-//                 + std::string FunctionName(int integer, double fraction)         --->         (int integer, double fraction) -> std::string
-//                       The function name is already present in the 'name' parameter to the macro. This parameter is necessary for specifying the exact type of
-//                   function that this macro should declare.
-//                       *** Beware of any commas in the return type! They get munched by the preprocessor and can lead to him ***
-//                       *** confusing the compiler in the entire compilation unit!!!                                          ***
-//
-//                 + int GetInteger() const                                         --->         () -> int const
-//                       Apply const-qualifiers to member functions as you normally would. Remember that you only may const-qualify member functions
-//                   taking a [this] pointer.
-//
-//                 + A TemplattedFunction(B b, std::add_pointer_t<C> ptr)           --->         (B b, std::add_pointer_t<C> ptr) -> A 
-//                       Use any template parameters as you normally would, even those that you declare in this macro before or after this function type.
-//                   You also may use 'decltype' in any parameter type and the return type itself without restrictions.
-//
-#define FnDecl(name, ...)  IntrospectiveBoilerplate(name, 0b0u, __VA_ARGS__); MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) auto name MACRO_MemberType(__VA_ARGS__)
-
-// Same as macro [FnDecl], but declares a member of the surrounding class namespace instead of a member function.
-#define MemDecl(name, ...) IntrospectiveBoilerplate(name, 0b0u, __VA_ARGS__); MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) ::introspective::Passthrough<MACRO_MemberType(__VA_ARGS__)> name
-
-// For use in conjunction with the scripting bridge. Same as macro [MemDecl], and tells the scripting bridge that these properties
-// have desired read-write status in the embedded scripting language.
-#define MemDeclReadonly(name, ...)  IntrospectiveBoilerplate(name, 0b01u, __VA_ARGS__); MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) MACRO_MemberType(__VA_ARGS__) name; 
-#define MemDeclWriteonly(name, ...) IntrospectiveBoilerplate(name, 0b10u, __VA_ARGS__); MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) MACRO_MemberType(__VA_ARGS__) name; 
-#define MemDeclReadwrite(name, ...) IntrospectiveBoilerplate(name, 0b11u, __VA_ARGS__); MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) MACRO_MemberType(__VA_ARGS__) name; 
-
-// For use in conjunction with the scripting bridge. Same as macro [FnDecl], and tells the scripting bridge that these functions
-// are to be considered as getters or setters respectively.
-#define FnDeclGetter(name, ...)  IntrospectiveBoilerplate(name, 0b01u, __VA_ARGS__); MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) auto name MACRO_MemberType(__VA_ARGS__)
-#define FnDeclSetter(name, ...)  IntrospectiveBoilerplate(name, 0b10u, __VA_ARGS__); MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) auto name MACRO_MemberType(__VA_ARGS__)
-
-// What follows is a boatload of preprocessor statements.
-// It's not very pretty. I can't do anything about the optics though.
-
-#define SemanticsLocalType(select, ...) ([](auto type) -> \
-        decltype(&GenericConstructor< \
-            typename ::std::remove_pointer_t<decltype(type)>::select \
-            __VA_OPT__(,__VA_ARGS__) \
-        >) \
-    { \
-        return &GenericConstructor<typename ::std::remove_pointer_t<decltype(type)>::select __VA_OPT__(,__VA_ARGS__) >; \
-    })
-
-#define SemanticsMember(select) ([](auto arg) -> decltype(&::std::remove_pointer_t<decltype(arg)>::select) \
-    { return &std::remove_pointer_t<decltype(arg)>::select; })
-
-#define IntrospectiveBoilerplate(name, flags, ...) PlainIntrospectiveRawBoilerplate(name, __LINE__, flags, __VA_ARGS__);
-
-// Consider the type names defined here as part of the private interface, subject to change.
-// This macro was written to pollute the surrounding type namespace as little as possible with each introspection,
-// occupying only two names in the entire surrounding type namespace.
-//
-// Second macro argument enables usage of other stateful compile time counters, such as the non-standard __COUNTER__ macro
-// or other hacks you might find. This header restricts itself to using the __LINE__ macro for portability.
-//
-// Third argument plays a key role when reflecting over template members: it controls whether the member
-// only accepts type parameters or non-type parameters; the only two possible values for the flavor
-// are 'typename' for type parameters and 'auto' for non-type parameters respectively.
-#define PlainIntrospectiveRawBoilerplate(name, StatefulCompiledCounter, flags, ...) \
-    template <typename DistinctIntrospectiveSelf, int loc, int dummy> \
-    struct IntrospectivesChain; \
-    template <int dummy> \
-    struct IntrospectivesChain<IntrospectiveSelf, StatefulCompiledCounter, dummy> \
-    { \
-        using TailAbove = ::introspective::timpl::RecursiveSeek_t<IntrospectiveSelf::IntrospectivesChain, IntrospectiveSelf, StatefulCompiledCounter - 1, -1, StatefulCompiledCounter>; \
-        constexpr static int MilesBelow = ::introspective::timpl::MilesBelowCheck<IntrospectivesChain<IntrospectiveSelf, StatefulCompiledCounter, dummy>>::MilesBelow; \
-        constexpr static bool IsFirstIntrospect = MilesBelow == 0; \
-        constexpr static inline char Name[] = STRINGIFY(MACRO_Munch_Declspec(name)); \
-        using TypedName = decltype(::introspective::Compiled<::introspective::Intern(Name)>);\
-    }; \
-    template <int i, int specializationDelay> struct IntrospectivesCount; \
-    template <int specializationDelay> struct IntrospectivesCount<IntrospectivesChain<IntrospectiveSelf, StatefulCompiledCounter, 0>::MilesBelow, specializationDelay>: \
-        IntrospectivesChain<IntrospectiveSelf, StatefulCompiledCounter, 0> \
-    { \
-        friend struct Introspective<IntrospectiveSelf>; \
-        struct IntrospectiveMemberMeta { \
-            consteval static inline unsigned char GetFlags() { return flags; } \
-            constexpr static inline char Name[] = STRINGIFY(MACRO_Munch_Declspec(name)); \
-            MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) \
-            constexpr static inline ::introspective::Passthrough<MACRO_TypeOverloadResolve(name, __VA_ARGS__)> Stencilled() { \
-                return MACRO_MemAddress(name, __VA_ARGS__); \
-            }; \
-            using TypedName = decltype(::introspective::Compiled<::introspective::Intern(Name)>); \
-            MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) constexpr static inline auto ArityString() { \
-                using M = ::introspective::Passthrough<MACRO_TypeOverloadResolve(name, __VA_ARGS__)>; \
-                if constexpr(::std::is_member_function_pointer_v<M> || (::std::is_pointer_v<M> && ::std::is_function_v<::std::remove_pointer_t<M>>)) { \
-                    using S = ::introspective::FptrAsSig_r<M>; \
-                    if constexpr(((::std::is_member_function_pointer_v<M> && S::Arity == 1) \
-                               || (::std::is_pointer_v<M> && ::std::is_function_v<::std::remove_pointer_t<M>> && S::Arity == 0)) \
-                              && (0b01 & GetFlags()) == 0b01) { return ::introspective::CompileTimeString<'\0'>{}; } \
-                    else { return S::template ArityString<::std::is_member_function_pointer_v<M>>(); } \
-                } else { return ::introspective::CompileTimeString<'\0'>{}; } \
-            } \
-            constexpr static inline auto ErasedSig = decltype(::introspective::Compiled<::introspective::Intern(Name)> + ArityString())::String; \
-            MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) consteval static inline bool IsNonStatic() { \
-                using M = ::introspective::Passthrough<MACRO_TypeOverloadResolve(name, __VA_ARGS__)>; \
-                return ::std::is_member_function_pointer_v<M> || ::std::is_member_object_pointer_v<M>; \
-            } \
-        }; \
-        consteval static auto CollectMember() { return IntrospectiveMemberMeta{}; } \
-    };
-
-#define LEFT_PARENS (
-#define RIGHT_PARENS )
-#define STRINGIFY(x) PRIMITIVE_STRINGIFY(x)
-#define PRIMITIVE_STRINGIFY(x) #x
-
-// Thanks to https://github.com/pfultz2/Cloak/wiki/C-Preprocessor-tricks,-tips,-and-idioms for teaching me
-// a little bit about the preprocessor's computation model!
-#define CAT(a, ...) PRIMITIVE_CAT(a, __VA_ARGS__)
-#define PRIMITIVE_CAT(a, ...) a ## __VA_ARGS__
-#define IIF(c) PRIMITIVE_CAT(IIF_, c)
-#define IIF_0(t, ...) __VA_ARGS__
-#define IIF_1(t, ...) t
-#define CHECK_N(x, n, ...) n
-#define CHECK(...) CHECK_N(__VA_ARGS__, 0,)
-#define NOT(x) CHECK(PRIMITIVE_CAT(NOT_, x))
-#define NOT_0 PROBE(~)
-#define COMPL(b) PRIMITIVE_CAT(COMPL_, b)
-#define COMPL_0 1
-#define COMPL_1 0
-#define BITAND(x) PRIMITIVE_CAT(BITAND_, x)
-#define BITAND_0(y) 0
-#define BITAND_1(y) y
-#define PROBE(x) x, 1,
-#define BOOL(x) COMPL(NOT(x))
-#define IF(c) IIF(BOOL(c))
-#define IS_PAREN(x) CHECK(IS_PAREN_PROBE x)
-#define IS_PAREN_PROBE(...) PROBE(~)
-#define EMPTY()
-#define DEFER(id) id EMPTY()
-#define OBSTRUCT(...) __VA_ARGS__ DEFER(EMPTY)()
-#define EXPAND(...) __VA_ARGS__
-
-// Thanks to https://www.scs.stanford.edu/~dm/blog/va-opt.html for the insight into macro mappings!
-#define PARENS ()
-
-#define EVAL(...) EVAL4(EVAL4(EVAL4(EVAL4(__VA_ARGS__))))
-#define EVAL4(...) EVAL3(EVAL3(EVAL3(EVAL3(__VA_ARGS__))))
-#define EVAL3(...) EVAL2(EVAL2(EVAL2(EVAL2(__VA_ARGS__))))
-#define EVAL2(...) EVAL1(EVAL1(EVAL1(EVAL1(__VA_ARGS__))))
-#define EVAL1(...) __VA_ARGS__
-
-#define FOR_EACH(macro, ...) __VA_OPT__(EVAL(FOR_EACH_HELPER(macro, __VA_ARGS__)))
-#define FOR_EACH_HELPER(macro, a1, ...) macro(a1) __VA_OPT__(FOR_EACH_AGAIN PARENS (macro, __VA_ARGS__))
-#define FOR_EACH_AGAIN() FOR_EACH_HELPER
-
-// FOR_EACH's availability bit is unset in nested macro calls, FOR_EACH2 should be called in deeper layers.
-#define FOR_EACH2(macro, ...) __VA_OPT__(FOR_EACH_HELPER2(macro, __VA_ARGS__))
-#define FOR_EACH_HELPER2(macro, a1, ...) macro(a1) __VA_OPT__(FOR_EACH_AGAIN2 PARENS (macro, __VA_ARGS__))
-#define FOR_EACH_AGAIN2() FOR_EACH_HELPER2
-
-// Just like FOR_EACH, but keeps comma punctuation between the varargs.
-#define FOR_EACH_KEEP_SEPARATION(macro, ...) __VA_OPT__(FOR_EACH_KEEP_SEPARATION_HELPER(macro, __VA_ARGS__))
-#define FOR_EACH_KEEP_SEPARATION_HELPER(macro, a1, ...) macro(a1) __VA_OPT__(,FOR_EACH_KEEP_SEPARATION_AGAIN PARENS (macro, __VA_ARGS__))
-#define FOR_EACH_KEEP_SEPARATION_AGAIN() FOR_EACH_KEEP_SEPARATION_HELPER
-
-#define APPLY(x) x
-// APPLY's availability bit is unset in nested macro calls, APPLY2 should take it from there
-#define APPLY2(x) x
-
-#define EAT(x)
-
-#define MACRO_NotStartsWith_TemplateOrRequires_template 0
-#define MACRO_NotStartsWith_TemplateOrRequires_requires 0
-
-#define MACRO_NotStartsWith_Template_template 0
-#define MACRO_NotStartsWith_Requires_requires 0
-
-#define MACRO_NotStartsWith_Typenames_typenames 0
-#define MACRO_NotStartsWith_Typenames_classes 0
-#define MACRO_NotStartsWith_Autos_autos 0
-
-#define MACRO_NotStartsWith_Auto_auto 0
-#define MACRO_NotStartsWith_Typename_typename 0
-#define MACRO_NotStartsWith_Typename_class 0
-
-#define MACRO_NotStartsWith_Default_default 0
-
-#define MACRO_NotStartsWith_Typenames(x) MACRO_NotStartsWith_Typenames_ ## x
-#define MACRO_NotStartsWith_Autos(x) MACRO_NotStartsWith_Autos_ ## x
-
-#define MACRO_NotStartsWith_Typename(x) MACRO_NotStartsWith_Typename_ ## x
-#define MACRO_NotStartsWith_Auto(x) MACRO_NotStartsWith_Auto_ ## x
-
-#define MACRO_NotStartsWith_Default(x) MACRO_NotStartsWith_Default_ ## x
-
-#define MACRO_NotStartsWith_TemplateOrRequires(x) MACRO_NotStartsWith_TemplateOrRequires_ ## x
-#define MACRO_NotStartsWith_Template(x)           MACRO_NotStartsWith_Template_ ## x
-#define MACRO_NotStartsWith_Requires(x)           MACRO_NotStartsWith_Requires_ ## x
-
-#define MACRO_NotStartsWith_Declspec(x) MACRO_NotStartsWith_Declspec_ ## x
-#define MACRO_NotStartsWith_Declspec_static 0
-#define MACRO_NotStartsWith_Declspec_constexpr 0
-#define MACRO_NotStartsWith_Declspec_inline 0
-#define MACRO_NotStartsWith_Declspec_virtual 0
-#define MACRO_NotStartsWith_Declspec_extern 0
-#define MACRO_NotStartsWith_Declspec_mutable 0
-#define MACRO_NotStartsWith_Declspec_thread_local 0
-
-#define MACRO_NotStartsWith_DefaultList(x) MACRO_NotStartsWith_DefaultList_ ## x
-#define MACRO_NotStartsWith_DefaultList_DefaultList(...) 0
-
-#define MACRO_Munch_Typenames_typenames
-#define MACRO_Munch_Typenames_classes
-#define MACRO_Munch_Autos_autos
-
-#define MACRO_Munch_Kind_typename
-#define MACRO_Munch_Kind_class
-#define MACRO_Munch_Kind_typenames
-#define MACRO_Munch_Kind_auto
-#define MACRO_Munch_Kind_autos
-#define MACRO_Munch_Kind_template(...)
-#define MACRO_Munch_Kind_default(...)
-
-#define MACRO_Munch_Default_default(...)
-
-#define MACRO_NotStartsWith_Static_static 0
-#define MACRO_NotStartsWith_Static(x) MACRO_NotStartsWith_Static_ ## x
-
-#define MACRO_ALWAYS_FALSE(x) 0
-#define MACRO_ALWAYS_TRUE(x)  1
-
-// We should not expected more than three declaration specifiers.
-// In case more are necessary, repeat this pattern ad infinitum.
-#define MACRO_NotHasStaticSpec4(x) IF(MACRO_NotStartsWith_Static(x))(MACRO_ALWAYS_TRUE, MACRO_ALWAYS_FALSE)(x)
-#define MACRO_NotHasStaticSpec3(x) MACRO_NotHasStaticSpec4(CAT(MACRO_Munch_Declspec_, x))
-#define MACRO_NotHasStaticSpec2(x) IF(MACRO_NotStartsWith_Static(x))(MACRO_NotHasStaticSpec3, MACRO_ALWAYS_FALSE)(x)
-#define MACRO_NotHasStaticSpec1(x) MACRO_NotHasStaticSpec2(CAT(MACRO_Munch_Declspec_, x))
-#define MACRO_NotHasStaticSpec(x) IF(MACRO_NotStartsWith_Static(x))(MACRO_NotHasStaticSpec1, MACRO_ALWAYS_FALSE)(x)
-
-#define MACRO_GetTemplateParamNameSingular
-
-#define MACRO_EvalTypenamePlural(x)        typename... MACRO_Munch_Typenames_ ## x 
-#define MACRO_EvalTypenamePluralArgName(x)             MACRO_Munch_Typenames_ ## x ...
-#define MACRO_EvalAutoPlural(x)            auto...     MACRO_Munch_Autos_     ## x
-#define MACRO_EvalAutoPluralArgName(x)                 MACRO_Munch_Autos_     ## x ...
-
-#define MACRO_Munch_OrdinaryTemplateArgName(x) MACRO_Munch_Kind_ ## x
-
-#define MACRO_EvalTemplateTemplate1(x) MACRO_EvalTemplateSig_ ## x
-// Argument form is "template(...) typename [default(...)] «Parameter Name»"
-#define MACRO_EvalTemplateTemplate(x) DEFER(MACRO_EvalTemplateTemplate1)(x)
-
-#define MACRO_EvalTemplateTemplateArgName1(x) MACRO_Munch_Kind_ ## x
-#define MACRO_EvalTemplateTemplateArgName(x) CAT(MACRO_Munch_Kind_, MACRO_EvalTemplateTemplateArgName1(x))
-
-#define MACRO_SpitDefault_DefaultList(...) __VA_ARGS__
-#define MACRO_ExpandDefaultList(x) = MACRO_SpitDefault_ ## x
-#define MACRO_SplitDefaultClause_default(...) DEFER(MACRO_EvalDefaultClause) LEFT_PARENS DEFER(DefaultList)(__VA_ARGS__), 
-
-// Argument [x] is either of the form "DefaultList(...)" or "«Parameter Name»"
-#define MACRO_ExpandDefaultStatementHere(x) IF(MACRO_NotStartsWith_DefaultList(x))(EAT, MACRO_ExpandDefaultList)(x)
-#define MACRO_ExpandDefaultedNameHere(x) IF(MACRO_NotStartsWith_DefaultList(x))(APPLY2, EAT)(x)
-
-#define MACRO_EvalDefaultClause1(...) DEFER(FOR_EACH2)(MACRO_ExpandDefaultedNameHere, __VA_ARGS__) DEFER(FOR_EACH2)(MACRO_ExpandDefaultStatementHere, __VA_ARGS__)
-#define MACRO_EvalDefaultClause(...) MACRO_EvalDefaultClause1(__VA_ARGS__)
-
-#define APPLY_template(x) DEFER(MACRO_EvalTemplateTemplate)(x) typename
-#define APPLY_auto(x) auto
-#define APPLY_typename(x) typename
-
-#define MACRO_OnlyLetKindsPass2(x) IF(MACRO_NotStartsWith_Template(x))(EAT, SORRY_TEMPLATE_TEMPLATE_DEFAULT_NOT_IMPLEMENTED_YET)(x)
-#define MACRO_OnlyLetKindsPass1(x) IF(MACRO_NotStartsWith_Auto(x))(MACRO_OnlyLetKindsPass2, APPLY_auto)(x)
-#define MACRO_OnlyLetKindsPass(x) IF(MACRO_NotStartsWith_Typename(x))(MACRO_OnlyLetKindsPass1, APPLY_typename)(x)
-
-// Here the argument is of the form "default(...) «Parameter Name»"
-#define MACRO_EvalDefaultedParamDecl2(x) MACRO_SplitDefaultClause_ ## x RIGHT_PARENS
-#define MACRO_EvalDefaultedParamDecl1(x) MACRO_EvalDefaultedParamDecl2(x)
-#define MACRO_EvalDefaultedParamDecl(x) MACRO_OnlyLetKindsPass(x) MACRO_EvalDefaultedParamDecl1(MACRO_Munch_OrdinaryTemplateArgName(x))
-
-#define MACRO_HasNoDefaultClause(x) CAT(MACRO_NotStartsWith_Default_, MACRO_Munch_OrdinaryTemplateArgName(x))
-#define MACRO_EvalNormalPossiblyDefaultParam(x) IF(MACRO_HasNoDefaultClause(x))(APPLY2, MACRO_EvalDefaultedParamDecl)(x)
-
-#define MACRO_ExpandTemplateParamKindsHere(...) FOR_EACH_KEEP_SEPARATION(MACRO_ExpandTemplateParamKindsHere1, __VA_ARGS__)
-#define MACRO_ExpandTemplateParamKindsHere1(x)  IF(MACRO_NotStartsWith_Typenames(x))(MACRO_ExpandTemplateParamKindsHere2, MACRO_EvalTypenamePlural)(x)
-#define MACRO_ExpandTemplateParamKindsHere2(x)  IF(MACRO_NotStartsWith_Autos(x))(MACRO_ExpandTemplateParamKindsHere3, MACRO_EvalAutoPlural)(x)
-#define MACRO_ExpandTemplateParamKindsHere3(x)  IF(MACRO_NotStartsWith_Template(x))(MACRO_EvalNormalPossiblyDefaultParam, MACRO_EvalTemplateTemplate)(x)
-
-#define MACRO_ExpandTemplateArgNamesHere(...)  FOR_EACH_KEEP_SEPARATION(MACRO_ExpandTemplateArgNamesHere1, __VA_ARGS__)
-#define MACRO_ExpandTemplateArgNamesHere1(x)   IF(MACRO_NotStartsWith_Typenames(x))(MACRO_ExpandTemplateArgNamesHere2, MACRO_EvalTypenamePluralArgName)(x)
-#define MACRO_ExpandTemplateArgNamesHere2(x)   IF(MACRO_NotStartsWith_Autos(x))(MACRO_ExpandTemplateArgNamesHere3, MACRO_EvalAutoPluralArgName)(x)
-#define MACRO_ExpandTemplateArgNamesHere3(x)   IF(MACRO_NotStartsWith_Template(x))(MACRO_Munch_OrdinaryTemplateArgName, MACRO_EvalTemplateTemplateArgName)(x)
-
-#define MACRO_EvalTemplateSig_template(...)  template < MACRO_ExpandTemplateParamKindsHere(__VA_ARGS__) >
-#define MACRO_EvalTemplateArgs_template(...)          < MACRO_ExpandTemplateArgNamesHere(__VA_ARGS__)   >
-#define MACRO_EvalConceptsSig_requires(...)  requires __VA_ARGS__
-
-#define MACRO_ExpandFunctionTypeHere1(x)       IF(MACRO_NotStartsWith_TemplateOrRequires(x))(APPLY, EAT)(x)
-#define MACRO_ExpandTemplateSigHere1(x)        IF(MACRO_NotStartsWith_Template(x))(EAT, APPLY)(MACRO_EvalTemplateSig_ ## x)
-#define MACRO_ExpandRequirementsHere1(x)       IF(MACRO_NotStartsWith_Requires(x))(EAT, APPLY)(MACRO_EvalConceptsSig_ ## x)
-#define MACRO_ExpandTemplateArgsHere1(x)       IF(MACRO_NotStartsWith_Template(x))(EAT, APPLY)(MACRO_EvalTemplateArgs_ ## x)
-#define MACRO_ExpandFunctionTypeHere(x)        IF(IS_PAREN(x))(APPLY, MACRO_ExpandFunctionTypeHere1)(x)
-#define MACRO_ExpandTemplateSigHere(x)         IF(IS_PAREN(x))(EAT, MACRO_ExpandTemplateSigHere1)(x)
-#define MACRO_ExpandRequirementsHere(x)        IF(IS_PAREN(x))(EAT, MACRO_ExpandRequirementsHere1)(x)
-#define MACRO_ExpandTemplateArgsHere(x)        IF(IS_PAREN(x))(EAT, MACRO_ExpandTemplateArgsHere1)(x)
-
-#define MACRO_MemberType(...)   FOR_EACH(MACRO_ExpandFunctionTypeHere, __VA_ARGS__)
-#define MACRO_TemplateSig(...)  FOR_EACH(MACRO_ExpandTemplateSigHere, __VA_ARGS__)
-#define MACRO_ConceptsSig(...)  FOR_EACH(MACRO_ExpandRequirementsHere, __VA_ARGS__)
-#define MACRO_TemplateArgs(...) FOR_EACH(MACRO_ExpandTemplateArgsHere, __VA_ARGS__)
-#define MACRO_MemAddress(name, ...) &IntrospectiveSelf::MACRO_Munch_Declspec(name) MACRO_TemplateArgs(__VA_ARGS__)
-
-#define MACRO_TypeOverloadAddAutoForFnType(x) IF(IS_PAREN(x))(auto x, x)
-#define MACRO_TypeOverloadResolve(name, ...) ::introspective::IF(MACRO_NotHasStaticSpec(name))(ObjectMemberType, StaticMemberType)<IntrospectiveSelf, MACRO_TypeOverloadAddAutoForFnType(MACRO_MemberType(__VA_ARGS__))>
-
-#define MACRO_Munch_Declspec_static
-#define MACRO_Munch_Declspec_constexpr
-#define MACRO_Munch_Declspec_inline
-#define MACRO_Munch_Declspec_virtual
-#define MACRO_Munch_Declspec_extern
-#define MACRO_Munch_Declspec_mutable
-#define MACRO_Munch_Declspec_thread_local
-#define MACRO_Munch_Declspec5(x) CAT(MACRO_Munch_Declspec_, x)
-#define MACRO_Munch_Declspec4(x) IF(MACRO_NotStartsWith_Declspec(x))(APPLY2, MACRO_Munch_Declspec5)(x)
-#define MACRO_Munch_Declspec3(x) MACRO_Munch_Declspec4(CAT(MACRO_Munch_Declspec_, x))
-#define MACRO_Munch_Declspec2(x) IF(MACRO_NotStartsWith_Declspec(x))(APPLY2, MACRO_Munch_Declspec3)(x)
-#define MACRO_Munch_Declspec1(x) MACRO_Munch_Declspec2(CAT(MACRO_Munch_Declspec_, x))
-#define MACRO_Munch_Declspec(x)  IF(MACRO_NotStartsWith_Declspec(x))(APPLY2, MACRO_Munch_Declspec1)(x)
-
-// You made it through the forest of the preprocessor #definitions!
-// As a bonus, here is some very verbose template C++ code!
-
 #include <array>
 #include <utility>
+#include <concepts>
 #include <algorithm>
 #include <functional>
 #include <type_traits>
@@ -640,12 +261,22 @@ struct IntrospectiveSettings
     constexpr static inline std::size_t MemberLimit = 60;
 };
 
-// Collection of types.
-template <typename... Coll>
-struct TypeColl
+namespace timpl
 {
-    constexpr static inline auto Len = sizeof...(Coll);
+
+// Compile-time fold implementation over generic lambdas.
+template <auto _accum, auto foldFn>
+struct Fold
+{
+    constexpr static inline auto accum = _accum;
+    template <auto another>
+    consteval inline auto operator |(Fold<another, foldFn> f) const
+    {
+        return Fold<foldFn.template operator()<accum>(another), foldFn>{};
+    }
 };
+
+}
 
 // Collection of elements of structural/literal type.
 template <auto... items>
@@ -678,6 +309,18 @@ struct LitColl
         return LitColl<items..., newItems...>{};
     }
 
+    template <auto reduce>
+    consteval static inline auto Reduce()
+    {
+        return reduce.template operator()<items...>();
+    }
+
+    template <auto fold, auto init>
+    consteval static inline auto FoldLeft()
+    {
+        return (timpl::Fold<init, fold>{} | ... | timpl::Fold<items, fold>{}).accum;
+    }
+
 private:
 
     template <auto predicate, auto... haystack>
@@ -706,7 +349,76 @@ private:
         template <auto... accum>
         consteval static inline auto LiftHay(LitColl<accum...> l) { return l; }
     };
+
 };
+
+// Collection of types.
+template <typename... Coll>
+struct TypeColl
+{
+    constexpr static inline auto Len = sizeof...(Coll);
+
+    // Retains select elements of the collection using a predicate.
+    // The predicate needs to have a template operator() function with one
+    // template argument (the item to check) and no ordinary arguments.
+    template <auto predicate>
+    consteval static inline auto Filter()
+    {
+        return Find_impl<predicate, Coll...>::LiftHay(TypeColl<>{});
+    }
+
+    // Maps every element of the collection using a map function.
+    // The map function needs to have a template operator() function with one
+    // template argument (the item to map) and no ordinary arguments.
+    template <auto mapper>
+    consteval static inline auto Map()
+    {
+        return TypeColl<decltype(mapper.template operator()<Coll>())...>{};
+    }
+
+    template <auto mapper>
+    consteval static inline auto MapToValues()
+    {
+        return LitColl<mapper.template operator()<Coll>()...>{};
+    }
+
+    // Concatenation of two literal collections.
+    template <typename... newItems>
+    consteval static inline TypeColl<Coll..., newItems...> Cat(TypeColl<newItems...>)
+    {
+        return TypeColl<Coll..., newItems...>{};
+    }
+
+private:
+
+    template <auto predicate, typename... haystack>
+    struct Find_impl;
+
+    template <auto predicate, typename first, typename... rest>
+    struct Find_impl<predicate, first, rest...>
+    {
+        template <typename... accum>
+        consteval static inline auto LiftHay(TypeColl<accum...> l)
+        {
+            if constexpr(predicate.template operator()<first>())
+            {
+                return Find_impl<predicate, rest...>::LiftHay(l.Cat(TypeColl<first>{}));
+            }
+            else
+            {
+                return Find_impl<predicate, rest...>::LiftHay(l);
+            }
+        }
+    };
+
+    template <auto predicate>
+    struct Find_impl<predicate>
+    {
+        template <typename... accum>
+        consteval static inline auto LiftHay(TypeColl<accum...> l) { return l; }
+    };
+};
+
 
 template <typename _Returned, typename... _Params>
 struct FnSig
@@ -816,10 +528,30 @@ struct FnBrief
     MarshallSig Fn;
 };
 
+template <typename _Self>
+struct IntrospectiveTag
+{
+};
+
 // Implementation of template algorithms. Not part of public interface.
 // Short for 'template implementation' and misslepping of 'template'.
 namespace timpl
 {
+
+template <typename... Args>
+constexpr bool All(Args... args) { return (... && args); }
+
+template <typename... Args>
+constexpr bool Any(Args... args) { return (... || args); }
+
+// Does any type inherit from the introspective framework already?
+template <typename... Antecedents>
+constexpr static inline bool IsAnyAntecedentReflective = timpl::Any(std::is_base_of_v<IntrospectiveTag<Antecedents>, Antecedents>...);
+// Does any type have virtual member functions?
+template <typename... Types>
+constexpr static inline bool IsAnyTypePolymorph = timpl::Any(std::is_polymorphic_v<Types>...);
+// Are all types default constructible?
+
 
 template <auto fptr, bool consideredAsObjectMember, typename _MarshallSig>
 struct MarshallFn_impl
@@ -1094,10 +826,13 @@ consteval auto MarshalledFnsUnnamed(LitColl<fptrs...>)
     return std::array<MarshallSig, sizeof...(fptrs)>{MarshallFn<MarshallSig, fptrs>()...};
 }
 
+template <typename A>
+concept Stencillable = requires(A a) { a.Stencilled(); };
+
 // Takes a collection of introspective member metas and converts each of them to a function with type MarshallSig.
 // The difference between this function and the function [MarshalledFns] is that this function does not add
 // setters for object member variables, whereas the other one does.
-template <typename MarshallSig, auto... memberMetas>
+template <typename MarshallSig, auto... memberMetas> requires (timpl::All(Stencillable<decltype(memberMetas)>...))
 consteval auto MarshalledFnsExpanded(LitColl<memberMetas...>)
 {
     return std::array<FnBrief<MarshallSig>, sizeof...(memberMetas)>{
@@ -1108,9 +843,6 @@ consteval auto MarshalledFnsExpanded(LitColl<memberMetas...>)
                             , .Fn = MarshallFn<MarshallSig>(
                                     timpl::ForwardStaticClass<memberMetas.Stencilled(), memberMetas.IsNonStatic()>{}) }... };
 }
-
-template <typename A>
-concept Stencillable = requires(A a) { a.Stencilled(); };
 
 // Takes a collection of compile-time member metas from a class inheriting from Introspective, 
 // adds setters where necessary to that collection, and converts all of those functions
@@ -1137,17 +869,54 @@ consteval auto MarshalledFns(LitColl<memberMetas...> l)
     );
 }
 
+template <typename _Self, typename... Antecedents>
+struct Will: Antecedents...
+{
+    constexpr Will(Antecedents&&... cons): Antecedents(std::forward<Antecedents>(cons))...
+    {
+    }
+};
+
+template <typename _Self>
+struct FirstWill
+{
+};
+
+template <typename _Self, typename... Antecedents> requires (sizeof...(Antecedents) == 0)
+auto DifferentialInheritanceRule() -> FirstWill<_Self>;
+
+template <typename _Self, typename... Antecedents> requires (sizeof...(Antecedents) >  0)
+auto DifferentialInheritanceRule() -> Will<_Self, Antecedents...>;
+
+template <typename _Self, typename... Antecedents>
+using DifferentialInheritanceRule_t = decltype(DifferentialInheritanceRule<_Self, Antecedents...>());
+
 // Enables the inheriting class to allow introspection into its members that have been
 // declared with introspection macros. Records their types and names, does not dis-
 // criminiate between member variables or functions.
 // The template parameter should be the inheriting class itself. This struct does not add
 // any virtual functions or instance member variables.
-template <typename _Self>
-struct Introspective
+// Make sure that when inheriting from other classes, all those classes appear in the template
+// argument list to this type as well.
+template <typename _Self, typename... Antecedents>
+struct Introspective: DifferentialInheritanceRule_t<_Self, Antecedents...>, IntrospectiveTag<_Self>
 {
-    // Alias for macros, for not having to name the introspected-upon type directly in them.
-    // Requires having to name it as a template parameter to this type though.
     using IntrospectiveSelf = _Self;
+    using DifferentialInheritanceRule_t<_Self, Antecedents...>::DifferentialInheritanceRule_t;
+
+#ifdef  __GNUG__
+#ifndef __clang__
+    static_assert(not timpl::IsAnyAntecedentReflective<Antecedents...>, 
+                 "g++ does not support inheritance of Introspective classes due to a compiler bug. Sorry! :(");
+#endif
+#endif
+
+private:
+    struct MemberResolveFail { const std::size_t index; };
+public:
+
+    // virtual ~Introspective() requires timpl::IsAnyTypePolymorph<Antecedents...> {}
+    // ~Introspective() requires (not timpl::IsAnyTypePolymorph<Antecedents...>) {}
 
     // Gets a specific recorded member by index.
     // All recorded members are enumerated from 0 onwards; if the standard compile-time macro counter is used,
@@ -1156,11 +925,30 @@ struct Introspective
     template <std::size_t index, std::size_t memberLimit = IntrospectiveSettings<IntrospectiveSelf, void>::MemberLimit>
     consteval static auto GetMemberByIndex()
     {
-        return Introspective<_Self>::FindIntrospect<MemberByIndexPredicate_s<index>{}>(
-            std::make_index_sequence<memberLimit>{});
+        constexpr auto typeHost = GetResponsibleTypePointer<index>();
+        using TypeHost = typename decltype(typeHost)::Type;
+
+        if constexpr(std::is_same_v<_Self, TypeHost>)
+        {
+            return GetMemberByIndexInItself<index>();
+        }
+        else if constexpr(std::is_void_v<TypeHost>)
+        {
+            return MemberResolveFail{ index };
+        }
+        else
+        {
+            return TypeHost::template GetMemberByIndex<index - typeHost.val>();
+        }
+    }
+    
+    template <std::size_t index, std::size_t memberLimit = IntrospectiveSettings<IntrospectiveSelf, void>::MemberLimit>
+    consteval static auto GetMemberByIndexInItself()
+    {
+        return FindIntrospect<[]<typename A>(A meta) consteval { return index == A::MilesBelow; }>(std::make_index_sequence<memberLimit>{});
+            
     }
 
-    // Gets all member meta objects in one LitColl<...> object.
     consteval static auto GetMembers()
     {
         return GetMemberMetas(std::make_index_sequence<GetReflectiveMemberCount()>());
@@ -1171,42 +959,7 @@ struct Introspective
     template <auto name, std::size_t memberLimit = IntrospectiveSettings<IntrospectiveSelf, void>::MemberLimit>
     consteval static auto GetMemberByName()
     {
-        return Introspective<_Self>::FindIntrospect<MemberByNamePredicate_s<name>{}>(std::make_index_sequence<memberLimit>{});
-    }
-
-    // Gets the number of recorded members in that type. The returned value will have an upper bound of [memberLimit].
-    template <std::size_t memberLimit = IntrospectiveSettings<IntrospectiveSelf, void>::MemberLimit>
-    consteval static std::size_t GetReflectiveMemberCount()
-    {
-        return Introspective<_Self>::First<ReflectiveMemberCountPredicate_s{}>(std::make_index_sequence<memberLimit>{});
-    }
-
-private:
-
-    // I would much rather just use lambdas, but Clang will not let me.
-    struct ReflectiveMemberCountPredicate_s
-    {
-        template <typename Meta> consteval bool operator()(Meta) const { return false; }
-    };
-
-    // clang 13.0.0 does not recognize a lambda expression equivalent to this struct as
-    // a valid template parameter for some reason, claiming that subsequent template instantiations
-    // reference an undefined function.
-    template <std::size_t index>
-    struct MemberByIndexPredicate_s
-    {
-        template <typename A> consteval bool operator()(A introspectiveMeta) const
-        {
-            return index == A::MilesBelow;
-        }
-    };
-
-    // This to please clang 13.0.0, ditto. Clang has sub-par support for lambdas in unevaluated
-    // context.
-    template <auto name>
-    struct MemberByNamePredicate_s
-    {
-        template <typename Meta> consteval bool operator()(Meta) const
+        return FindIntrospect<[]<typename Meta>(Meta) consteval
         {
             if constexpr(name.Len != Meta::Typed::Len) { return false; }
             else
@@ -1217,8 +970,29 @@ private:
                 }
                 return true;
             }
-        }
-    };
+        }>(std::make_index_sequence<memberLimit>{});
+    }
+
+    // Gets the number of recorded members in that type and all supertypes. The returned value will have an upper bound of [memberLimit].
+    template <std::size_t memberLimit = IntrospectiveSettings<IntrospectiveSelf, void>::MemberLimit>
+    consteval static std::size_t GetReflectiveMemberCount()
+    {
+        constexpr auto reflectiveSupers = GetSuperclasses().template Filter<[]<typename Super>() consteval { return std::is_base_of_v<Introspective<Super>, Super>; }>();
+        constexpr auto memCount = reflectiveSupers.template MapToValues<[]<typename Super>() consteval { return Super::GetReflectiveMemberCount(); }>()
+                                                  .template Reduce<[]<auto... counts>() consteval { return (0 + ... + counts); }>();
+        return GetReflectiveMemberCountInItself() + memCount;
+    }
+
+    // Gets the number of members that have been declared inside the current class IntrospectiveSelf.
+    template <std::size_t memberLimit = IntrospectiveSettings<IntrospectiveSelf, void>::MemberLimit>
+    consteval static std::size_t GetReflectiveMemberCountInItself()
+    {
+        return First<[]<typename A>(A meta) consteval { return false; }>(std::make_index_sequence<memberLimit>{});
+    }
+
+    consteval static TypeColl<Antecedents...> GetSuperclasses() { return TypeColl<Antecedents...>{}; }
+
+private:
 
     template <std::size_t... haystack>
     consteval static auto GetMemberMetas(std::index_sequence<haystack...>)
@@ -1237,7 +1011,6 @@ private:
         // Used in place of IntrospectiveMemberMeta when no such member can be found
         struct MemberFail
         {
-            consteval MemberFail() = default;
             // This could potentially come back to bite me:
             // When reflecting upon a non-existent template member, if
             // any of the template's arguments were type template arguments,
@@ -1246,7 +1019,7 @@ private:
             // such template member in the first place.
             // < should a template parameter pack be here? >
             // I'll put it in, we'll see how this shakes out
-            template <auto...> consteval static std::nullptr_t Stencilled() { return nullptr; }
+            // template <auto...> consteval static std::nullptr_t Stencilled() { return nullptr; }
         };
 
         template <std::size_t j>
@@ -1266,16 +1039,433 @@ private:
     template <auto predicate, std::size_t... haystack>
     consteval static auto FindIntrospect(std::index_sequence<haystack...>)
     {
-        return (FoldGenericFind<haystack, predicate>{}, ...).GetMember();
+        return (..., FoldGenericFind<haystack, predicate>{}).GetMember();
     }
 
     template <auto predicate, std::size_t... haystack>
     consteval static std::size_t First(std::index_sequence<haystack...>)
     {
-        return decltype((FoldGenericFind<haystack, predicate>{}, ...))::Index;
+        return decltype((..., FoldGenericFind<haystack, predicate>{}))::Index;
     }
+
+    template <typename _Type, typename _Val>
+    struct TypeValuePair
+    {
+        using Type = _Type;
+        using Val  = _Val;
+        const Val val;
+    };
+
+    template <std::size_t index>
+    consteval static auto GetResponsibleTypePointer()
+    {
+        constexpr TypeColl<Antecedents...> init;
+        constexpr auto reflective = init.template Filter<[]<typename A>() consteval { return std::is_convertible_v<A*, IntrospectiveTag<A>*>; }>();
+
+        constexpr auto typeMemcountPairs = reflective.template MapToValues<
+            []<typename A>() consteval { return TypeValuePair<A, std::size_t>{ .val = A::GetReflectiveMemberCount() }; }>();
+        constexpr auto indexStop = typeMemcountPairs.template FoldLeft<
+            []<auto c>(auto e) consteval 
+            {
+                if constexpr(std::greater<std::size_t>{}(c.val, index)) { return c; }
+                else { return TypeValuePair<typename decltype(e)::Type, std::size_t>{ .val = c.val + e.val }; }
+            },
+            TypeValuePair<_Self, std::size_t>{ .val = GetReflectiveMemberCountInItself() }>();
+
+        using FinalType = typename decltype(indexStop)::Type;
+        if constexpr(std::is_same_v<FinalType, _Self>)
+        {
+            return TypeValuePair<_Self, std::size_t>{ .val = 0 };
+        }
+        else
+        {
+            return TypeValuePair<FinalType, std::size_t>{ .val = indexStop.val - FinalType::GetReflectiveMemberCount() };
+        }
+    }
+
 };
+
 }
+
+// Returns a constant bool if given type contains some named member variable or member function.
+// Works with template types and arguments, too.
+// Varargs are the parameter types of the function, if the member in question happens to be a function. For functions
+// with arity 0 one need not provide any varargs.
+#define HasMember(InType, member, ...) (::introspective::ArbitraryDetection::CheckInstantiable<InType __VA_OPT__(,__VA_ARGS__)>(SemanticsMember(member)))
+
+// Returns stateless lambda yielding a pointer to given member of given type, or nullptr if no such member exists.
+// Varargs are the parameter types of the function, if the member in question happens to be a function. For functions
+// with arity 0 one need not provide any varargs.
+#define ConservedMember(InType, member, ...) (::introspective::ArbitraryDetection::ConservedInstance<InType __VA_OPT__(,__VA_ARGS__)>(SemanticsMember(member)))
+
+// Returns a stateless function acting as middleman between the caller and the constructor of a local type 'Inner'
+// inside type 'Outer'. The local type needs to inherit from a known type 'AsType', which - upon invocation of the
+// returned lambda - will be converted to the known type.
+// The new object is placed on the heap with operator new.
+// Varargs are the parameter types of the constructor in question.
+#define GetLocalTypeConstructor(Outer, Inner, AsType, ...) (::introspective::ArbitraryDetection::GetInstance<Outer, ::std::add_pointer_t<::std::add_pointer_t<AsType>(__VA_ARGS__)> ,##__VA_ARGS__ >(SemanticsLocalType(Inner __VA_OPT__(,__VA_ARGS__))))
+
+// Returns a pointer to a static member variable of some given type or a function pointer to a static member
+// function of some given type, or nullptr if no such member exists.
+// The member needs to be convertible to the given type, or - in the case of a function - the argument and
+// the return types must match insofar as to be convertible to each respective other.
+#define GetStaticMember(InType, member, MemberType, ...) (::introspective::ArbitraryDetection::GetInstance<InType, ::std::add_pointer_t<MemberType>>(SemanticsMember(member)))
+
+// Same as macro GetStaticMember, except that it enforces const on the given type.
+#define GetStaticConstant(InType, member, MemberType) (::introspective::ArbitraryDetection::GetInstance<InType, ::std::add_pointer_t<::std::add_const_t<MemberType>>>(SemanticsMember(member)))
+
+// Returns a pointer to member to a member variable.
+// This one is a little tricky; play around with the types a little bit. I have not seen
+// a lot of pointer-to-member types in the wild, but it's there for those who need it.
+// Some advice: take note and observe how pointer-to-member types interact with classes from the
+// standard library - say, std::function.
+#define GetObjectMember(InType, member, MemberType) (::introspective::ArbitraryDetection::GetInstance<InType, MemberType InType::*>(SemanticsMember(member)))
+
+// Declare a function in the current class namespace. The definition of this function may be provided inline.
+//  - name: The name of the function as a literal, not enclosed in quotes.
+//          May be preceded by the literals: virtual, static, constexpr, inline, thread_local, extern
+//  
+//  - ... : Template signature, C++20 requires clause, or type declaration, in any order. A type must be present, all else is optional.
+//          For declaring a template, use this syntax:
+//                 + template<  « ... »  >                   --->     template(  « ... »  )      (Enclose template parameters in normal parentheses, not in angle brackets. Same goes for
+//                                                                                                template template parameters)
+//                                                       
+//                 + typename A = void                       --->     typename default(void) A   (Enclose default arguments in a "call" to 'default', default(...) needs to precede
+//                                                                                                the parameter name. Same goes for non-type parameters.
+//                                                                                                Template template default arguments are not supported yet)
+//                                                       
+//                 + int Val = 3                             --->     auto default(3) Val        (Only use 'auto' for specifying non-type template parameters.
+//                                                                                                You have ample opportunity to check the non-type parameter's type
+//                                                                                                in the requires clause)
+//
+//                 + typename A = std::enable_if< «...» >    --->     typename default(std::enable_if< «...» >) A
+//                                                                                               (Use angle brackets when inside default parentheses as you
+//                                                                                                normally would for specifying arguments to templates.
+//                                                                                                Don't leave template parameters anonymous.)
+//          For declaring a requires clause, use this syntax:
+//                 + requires  « ... »         --->     requires(  « ... »  )      (Enclose requires clause in normal parentheses. Use normal C++ syntax inside them, including
+//                                                                                  angle brackets for templates, as you would anywhere else)
+//          For declaring a function type, use this syntax:
+//                 + std::string FunctionName(int integer, double fraction)         --->         (int integer, double fraction) -> std::string
+//                       The function name is already present in the 'name' parameter to the macro. This parameter is necessary for specifying the exact type of
+//                   function that this macro should declare.
+//                       *** Beware of any commas in the return type! They get munched by the preprocessor and can lead to him ***
+//                       *** confusing the compiler in the entire compilation unit!!!                                          ***
+//
+//                 + int GetInteger() const                                         --->         () -> int const
+//                       Apply const-qualifiers to member functions as you normally would. Remember that you only may const-qualify member functions
+//                   taking a [this] pointer.
+//
+//                 + A TemplattedFunction(B b, std::add_pointer_t<C> ptr)           --->         (B b, std::add_pointer_t<C> ptr) -> A 
+//                       Use any template parameters as you normally would, even those that you declare in this macro before or after this function type.
+//                   You also may use 'decltype' in any parameter type and the return type itself without restrictions. Default
+//                   parameters for function parameters are not supported. Use overloads instead.
+//
+#define FnDecl(name, ...)  IntrospectiveBoilerplate(name, 0b0u, __VA_ARGS__); MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) auto name MACRO_MemberType(__VA_ARGS__)
+
+// Same as macro [FnDecl], but declares a member of the surrounding class namespace instead of a member function.
+#define MemDecl(name, ...) IntrospectiveBoilerplate(name, 0b0u, __VA_ARGS__); MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) ::introspective::Passthrough<MACRO_MemberType(__VA_ARGS__)> name
+
+// For use in conjunction with the scripting bridge. Same as macro [MemDecl], and tells the scripting bridge that these properties
+// have desired read-write status in the embedded scripting language.
+#define MemDeclReadonly(name, ...)  IntrospectiveBoilerplate(name, 0b01u, __VA_ARGS__); MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) MACRO_MemberType(__VA_ARGS__) name; 
+#define MemDeclWriteonly(name, ...) IntrospectiveBoilerplate(name, 0b10u, __VA_ARGS__); MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) MACRO_MemberType(__VA_ARGS__) name; 
+#define MemDeclReadwrite(name, ...) IntrospectiveBoilerplate(name, 0b11u, __VA_ARGS__); MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) MACRO_MemberType(__VA_ARGS__) name; 
+
+// For use in conjunction with the scripting bridge. Same as macro [FnDecl], and tells the scripting bridge that these functions
+// are to be considered as getters or setters respectively.
+#define FnDeclGetter(name, ...)  IntrospectiveBoilerplate(name, 0b01u, __VA_ARGS__); MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) auto name MACRO_MemberType(__VA_ARGS__)
+#define FnDeclSetter(name, ...)  IntrospectiveBoilerplate(name, 0b10u, __VA_ARGS__); MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) auto name MACRO_MemberType(__VA_ARGS__)
+
+// What follows is a boatload of preprocessor statements.
+// It's not very pretty. I can't do anything about the optics though.
+
+#define SemanticsLocalType(select, ...) ([](auto type) -> \
+        decltype(&GenericConstructor< \
+            typename ::std::remove_pointer_t<decltype(type)>::select \
+            __VA_OPT__(,__VA_ARGS__) \
+        >) \
+    { \
+        return &GenericConstructor<typename ::std::remove_pointer_t<decltype(type)>::select __VA_OPT__(,__VA_ARGS__) >; \
+    })
+
+#define SemanticsMember(select) ([](auto arg) -> decltype(&::std::remove_pointer_t<decltype(arg)>::select) \
+    { return &std::remove_pointer_t<decltype(arg)>::select; })
+
+#define IntrospectiveBoilerplate(name, flags, ...) PlainIntrospectiveRawBoilerplate(name, __LINE__, flags, __VA_ARGS__);
+
+// Consider the type names defined here as part of the private interface, subject to change.
+// This macro was written to pollute the surrounding type namespace as little as possible with each introspection,
+// occupying only two names in the entire surrounding type namespace.
+//
+// Second macro argument enables usage of other stateful compile time counters, such as the non-standard __COUNTER__ macro
+// or other hacks you might find. This header restricts itself to using the __LINE__ macro for portability.
+//
+// Third argument plays a key role when reflecting over template members: it controls whether the member
+// only accepts type parameters or non-type parameters; the only two possible values for the flavor
+// are 'typename' for type parameters and 'auto' for non-type parameters respectively.
+#define PlainIntrospectiveRawBoilerplate(name, StatefulCompiledCounter, flags, ...) \
+    template <typename DistinctIntrospectiveSelf, int loc, int dummy> \
+    struct IntrospectivesChain; \
+    template <int dummy> \
+    struct IntrospectivesChain<IntrospectiveSelf, StatefulCompiledCounter, dummy> \
+    { \
+        using TailAbove = ::introspective::timpl::RecursiveSeek_t<IntrospectiveSelf::IntrospectivesChain, IntrospectiveSelf, StatefulCompiledCounter - 1, -1, StatefulCompiledCounter>; \
+        constexpr static int MilesBelow = ::introspective::timpl::MilesBelowCheck<IntrospectivesChain<IntrospectiveSelf, StatefulCompiledCounter, dummy>>::MilesBelow; \
+        constexpr static bool IsFirstIntrospect = MilesBelow == 0; \
+        constexpr static inline char Name[] = STRINGIFY(MACRO_Munch_Declspec(name)); \
+        using TypedName = decltype(::introspective::Compiled<::introspective::Intern(Name)>);\
+    }; \
+    template <int i, int specializationDelay> struct IntrospectivesCount; \
+    template <int specializationDelay> struct IntrospectivesCount<IntrospectivesChain<IntrospectiveSelf, StatefulCompiledCounter, 0>::MilesBelow, specializationDelay>: \
+        IntrospectivesChain<IntrospectiveSelf, StatefulCompiledCounter, 0> \
+    { \
+        friend struct Introspective<IntrospectiveSelf>; \
+        struct IntrospectiveMemberMeta { \
+            consteval static inline unsigned char GetFlags() { return flags; } \
+            constexpr static inline char Name[] = STRINGIFY(MACRO_Munch_Declspec(name)); \
+            MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) \
+            constexpr static inline ::introspective::Passthrough<MACRO_TypeOverloadResolve(name, __VA_ARGS__)> Stencilled() { \
+                return MACRO_MemAddress(name, __VA_ARGS__); \
+            }; \
+            using TypedName = decltype(::introspective::Compiled<::introspective::Intern(Name)>); \
+            MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) constexpr static inline auto ArityString() { \
+                using M = ::introspective::Passthrough<MACRO_TypeOverloadResolve(name, __VA_ARGS__)>; \
+                if constexpr(::std::is_member_function_pointer_v<M> || (::std::is_pointer_v<M> && ::std::is_function_v<::std::remove_pointer_t<M>>)) { \
+                    using S = ::introspective::FptrAsSig_r<M>; \
+                    if constexpr(((::std::is_member_function_pointer_v<M> && S::Arity == 1) \
+                               || (::std::is_pointer_v<M> && ::std::is_function_v<::std::remove_pointer_t<M>> && S::Arity == 0)) \
+                              && (0b01 & GetFlags()) == 0b01) { return ::introspective::CompileTimeString<'\0'>{}; } \
+                    else { return S::template ArityString<::std::is_member_function_pointer_v<M>>(); } \
+                } else { return ::introspective::CompileTimeString<'\0'>{}; } \
+            } \
+            MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) \
+            constexpr static inline auto ErasedSig = decltype(::introspective::Compiled<::introspective::Intern(Name)> + ArityString MACRO_TemplateArgs(__VA_ARGS__)())::String; \
+            MACRO_TemplateSig(__VA_ARGS__) MACRO_ConceptsSig(__VA_ARGS__) consteval static inline bool IsNonStatic() { \
+                using M = ::introspective::Passthrough<MACRO_TypeOverloadResolve(name, __VA_ARGS__)>; \
+                return ::std::is_member_function_pointer_v<M> || ::std::is_member_object_pointer_v<M>; \
+            } \
+        }; \
+        consteval static auto CollectMember() { return IntrospectiveMemberMeta{}; } \
+    };
+
+#define LEFT_PARENS (
+#define RIGHT_PARENS )
+#define STRINGIFY(x) PRIMITIVE_STRINGIFY(x)
+#define PRIMITIVE_STRINGIFY(x) #x
+
+// Thanks to https://github.com/pfultz2/Cloak/wiki/C-Preprocessor-tricks,-tips,-and-idioms for teaching me
+// a little bit about the preprocessor's computation model!
+#define CAT(a, ...) PRIMITIVE_CAT(a, __VA_ARGS__)
+#define PRIMITIVE_CAT(a, ...) a ## __VA_ARGS__
+#define IIF(c) PRIMITIVE_CAT(IIF_, c)
+#define IIF_0(t, ...) __VA_ARGS__
+#define IIF_1(t, ...) t
+#define CHECK_N(x, n, ...) n
+#define CHECK(...) CHECK_N(__VA_ARGS__, 0,)
+#define NOT(x) CHECK(PRIMITIVE_CAT(NOT_, x))
+#define NOT_0 PROBE(~)
+#define COMPL(b) PRIMITIVE_CAT(COMPL_, b)
+#define COMPL_0 1
+#define COMPL_1 0
+#define BITAND(x) PRIMITIVE_CAT(BITAND_, x)
+#define BITAND_0(y) 0
+#define BITAND_1(y) y
+#define PROBE(x) x, 1,
+#define BOOL(x) COMPL(NOT(x))
+#define IF(c) IIF(BOOL(c))
+#define IS_PAREN(x) CHECK(IS_PAREN_PROBE x)
+#define IS_PAREN_PROBE(...) PROBE(~)
+#define EMPTY()
+#define DEFER(id) id EMPTY()
+#define OBSTRUCT(...) __VA_ARGS__ DEFER(EMPTY)()
+#define EXPAND(...) __VA_ARGS__
+
+// Thanks to https://www.scs.stanford.edu/~dm/blog/va-opt.html for the insight into macro mappings!
+#define PARENS ()
+
+#define EVAL(...) EVAL4(EVAL4(EVAL4(EVAL4(__VA_ARGS__))))
+#define EVAL4(...) EVAL3(EVAL3(EVAL3(EVAL3(__VA_ARGS__))))
+#define EVAL3(...) EVAL2(EVAL2(EVAL2(EVAL2(__VA_ARGS__))))
+#define EVAL2(...) EVAL1(EVAL1(EVAL1(EVAL1(__VA_ARGS__))))
+#define EVAL1(...) __VA_ARGS__
+
+#define FOR_EACH(macro, ...) __VA_OPT__(EVAL(FOR_EACH_HELPER(macro, __VA_ARGS__)))
+#define FOR_EACH_HELPER(macro, a1, ...) macro(a1) __VA_OPT__(FOR_EACH_AGAIN PARENS (macro, __VA_ARGS__))
+#define FOR_EACH_AGAIN() FOR_EACH_HELPER
+
+// FOR_EACH's availability bit is unset in nested macro calls, FOR_EACH2 should be called in deeper layers.
+#define FOR_EACH2(macro, ...) __VA_OPT__(FOR_EACH_HELPER2(macro, __VA_ARGS__))
+#define FOR_EACH_HELPER2(macro, a1, ...) macro(a1) __VA_OPT__(FOR_EACH_AGAIN2 PARENS (macro, __VA_ARGS__))
+#define FOR_EACH_AGAIN2() FOR_EACH_HELPER2
+
+// Just like FOR_EACH, but keeps comma punctuation between the varargs.
+#define FOR_EACH_KEEP_SEPARATION(macro, ...) __VA_OPT__(FOR_EACH_KEEP_SEPARATION_HELPER(macro, __VA_ARGS__))
+#define FOR_EACH_KEEP_SEPARATION_HELPER(macro, a1, ...) macro(a1) __VA_OPT__(,FOR_EACH_KEEP_SEPARATION_AGAIN PARENS (macro, __VA_ARGS__))
+#define FOR_EACH_KEEP_SEPARATION_AGAIN() FOR_EACH_KEEP_SEPARATION_HELPER
+
+#define APPLY(x) x
+// APPLY's availability bit is unset in nested macro calls, APPLY2 should take it from there
+#define APPLY2(x) x
+
+#define EAT(x)
+
+#define MACRO_NotStartsWith_TemplateOrRequires_template 0
+#define MACRO_NotStartsWith_TemplateOrRequires_requires 0
+
+#define MACRO_NotStartsWith_Template_template 0
+#define MACRO_NotStartsWith_Requires_requires 0
+
+#define MACRO_NotStartsWith_Typenames_typenames 0
+#define MACRO_NotStartsWith_Typenames_classes 0
+#define MACRO_NotStartsWith_Autos_autos 0
+
+#define MACRO_NotStartsWith_Auto_auto 0
+#define MACRO_NotStartsWith_Typename_typename 0
+#define MACRO_NotStartsWith_Typename_class 0
+
+#define MACRO_NotStartsWith_Default_default 0
+
+#define MACRO_NotStartsWith_Typenames(x) MACRO_NotStartsWith_Typenames_ ## x
+#define MACRO_NotStartsWith_Autos(x) MACRO_NotStartsWith_Autos_ ## x
+
+#define MACRO_NotStartsWith_Typename(x) MACRO_NotStartsWith_Typename_ ## x
+#define MACRO_NotStartsWith_Auto(x) MACRO_NotStartsWith_Auto_ ## x
+
+#define MACRO_NotStartsWith_Default(x) MACRO_NotStartsWith_Default_ ## x
+
+#define MACRO_NotStartsWith_TemplateOrRequires(x) MACRO_NotStartsWith_TemplateOrRequires_ ## x
+#define MACRO_NotStartsWith_Template(x)           MACRO_NotStartsWith_Template_ ## x
+#define MACRO_NotStartsWith_Requires(x)           MACRO_NotStartsWith_Requires_ ## x
+
+#define MACRO_NotStartsWith_Declspec(x) MACRO_NotStartsWith_Declspec_ ## x
+#define MACRO_NotStartsWith_Declspec_static 0
+#define MACRO_NotStartsWith_Declspec_constexpr 0
+#define MACRO_NotStartsWith_Declspec_inline 0
+#define MACRO_NotStartsWith_Declspec_virtual 0
+#define MACRO_NotStartsWith_Declspec_extern 0
+#define MACRO_NotStartsWith_Declspec_mutable 0
+#define MACRO_NotStartsWith_Declspec_thread_local 0
+
+#define MACRO_NotStartsWith_DefaultList(x) MACRO_NotStartsWith_DefaultList_ ## x
+#define MACRO_NotStartsWith_DefaultList_DefaultList(...) 0
+
+#define MACRO_Munch_Typenames_typenames
+#define MACRO_Munch_Typenames_classes
+#define MACRO_Munch_Autos_autos
+
+#define MACRO_Munch_Kind_typename
+#define MACRO_Munch_Kind_class
+#define MACRO_Munch_Kind_typenames
+#define MACRO_Munch_Kind_auto
+#define MACRO_Munch_Kind_autos
+#define MACRO_Munch_Kind_template(...)
+#define MACRO_Munch_Kind_default(...)
+
+#define MACRO_Munch_Default_default(...)
+
+#define MACRO_NotStartsWith_Static_static 0
+#define MACRO_NotStartsWith_Static(x) MACRO_NotStartsWith_Static_ ## x
+
+#define MACRO_ALWAYS_FALSE(x) 0
+#define MACRO_ALWAYS_TRUE(x)  1
+
+// We should not expected more than three declaration specifiers.
+// In case more are necessary, repeat this pattern ad infinitum.
+#define MACRO_NotHasStaticSpec4(x) IF(MACRO_NotStartsWith_Static(x))(MACRO_ALWAYS_TRUE, MACRO_ALWAYS_FALSE)(x)
+#define MACRO_NotHasStaticSpec3(x) MACRO_NotHasStaticSpec4(CAT(MACRO_Munch_Declspec_, x))
+#define MACRO_NotHasStaticSpec2(x) IF(MACRO_NotStartsWith_Static(x))(MACRO_NotHasStaticSpec3, MACRO_ALWAYS_FALSE)(x)
+#define MACRO_NotHasStaticSpec1(x) MACRO_NotHasStaticSpec2(CAT(MACRO_Munch_Declspec_, x))
+#define MACRO_NotHasStaticSpec(x) IF(MACRO_NotStartsWith_Static(x))(MACRO_NotHasStaticSpec1, MACRO_ALWAYS_FALSE)(x)
+
+#define MACRO_GetTemplateParamNameSingular
+
+#define MACRO_EvalTypenamePlural(x)        typename... MACRO_Munch_Typenames_ ## x 
+#define MACRO_EvalTypenamePluralArgName(x)             MACRO_Munch_Typenames_ ## x ...
+#define MACRO_EvalAutoPlural(x)            auto...     MACRO_Munch_Autos_     ## x
+#define MACRO_EvalAutoPluralArgName(x)                 MACRO_Munch_Autos_     ## x ...
+
+#define MACRO_Munch_OrdinaryTemplateArgName(x) MACRO_Munch_Kind_ ## x
+
+#define MACRO_EvalTemplateTemplate1(x) MACRO_EvalTemplateSig_ ## x
+// Argument form is "template(...) typename [default(...)] «Parameter Name»"
+#define MACRO_EvalTemplateTemplate(x) DEFER(MACRO_EvalTemplateTemplate1)(x)
+
+#define MACRO_EvalTemplateTemplateArgName1(x) MACRO_Munch_Kind_ ## x
+#define MACRO_EvalTemplateTemplateArgName(x) CAT(MACRO_Munch_Kind_, MACRO_EvalTemplateTemplateArgName1(x))
+
+#define MACRO_SpitDefault_DefaultList(...) __VA_ARGS__
+#define MACRO_ExpandDefaultList(x) = MACRO_SpitDefault_ ## x
+#define MACRO_SplitDefaultClause_default(...) DEFER(MACRO_EvalDefaultClause) LEFT_PARENS DEFER(DefaultList)(__VA_ARGS__), 
+
+// Argument [x] is either of the form "DefaultList(...)" or "«Parameter Name»"
+#define MACRO_ExpandDefaultStatementHere(x) IF(MACRO_NotStartsWith_DefaultList(x))(EAT, MACRO_ExpandDefaultList)(x)
+#define MACRO_ExpandDefaultedNameHere(x) IF(MACRO_NotStartsWith_DefaultList(x))(APPLY2, EAT)(x)
+
+#define MACRO_EvalDefaultClause1(...) DEFER(FOR_EACH2)(MACRO_ExpandDefaultedNameHere, __VA_ARGS__) DEFER(FOR_EACH2)(MACRO_ExpandDefaultStatementHere, __VA_ARGS__)
+#define MACRO_EvalDefaultClause(...) MACRO_EvalDefaultClause1(__VA_ARGS__)
+
+#define APPLY_template(x) DEFER(MACRO_EvalTemplateTemplate)(x) typename
+#define APPLY_auto(x) auto
+#define APPLY_typename(x) typename
+
+#define MACRO_OnlyLetKindsPass2(x) IF(MACRO_NotStartsWith_Template(x))(EAT, SORRY_TEMPLATE_TEMPLATE_DEFAULT_NOT_IMPLEMENTED_YET)(x)
+#define MACRO_OnlyLetKindsPass1(x) IF(MACRO_NotStartsWith_Auto(x))(MACRO_OnlyLetKindsPass2, APPLY_auto)(x)
+#define MACRO_OnlyLetKindsPass(x) IF(MACRO_NotStartsWith_Typename(x))(MACRO_OnlyLetKindsPass1, APPLY_typename)(x)
+
+// Here the argument is of the form "default(...) «Parameter Name»"
+#define MACRO_EvalDefaultedParamDecl2(x) MACRO_SplitDefaultClause_ ## x RIGHT_PARENS
+#define MACRO_EvalDefaultedParamDecl1(x) MACRO_EvalDefaultedParamDecl2(x)
+#define MACRO_EvalDefaultedParamDecl(x) MACRO_OnlyLetKindsPass(x) MACRO_EvalDefaultedParamDecl1(MACRO_Munch_OrdinaryTemplateArgName(x))
+
+#define MACRO_HasNoDefaultClause(x) CAT(MACRO_NotStartsWith_Default_, MACRO_Munch_OrdinaryTemplateArgName(x))
+#define MACRO_EvalNormalPossiblyDefaultParam(x) IF(MACRO_HasNoDefaultClause(x))(APPLY2, MACRO_EvalDefaultedParamDecl)(x)
+
+#define MACRO_ExpandTemplateParamKindsHere(...) FOR_EACH_KEEP_SEPARATION(MACRO_ExpandTemplateParamKindsHere1, __VA_ARGS__)
+#define MACRO_ExpandTemplateParamKindsHere1(x)  IF(MACRO_NotStartsWith_Typenames(x))(MACRO_ExpandTemplateParamKindsHere2, MACRO_EvalTypenamePlural)(x)
+#define MACRO_ExpandTemplateParamKindsHere2(x)  IF(MACRO_NotStartsWith_Autos(x))(MACRO_ExpandTemplateParamKindsHere3, MACRO_EvalAutoPlural)(x)
+#define MACRO_ExpandTemplateParamKindsHere3(x)  IF(MACRO_NotStartsWith_Template(x))(MACRO_EvalNormalPossiblyDefaultParam, MACRO_EvalTemplateTemplate)(x)
+
+#define MACRO_ExpandTemplateArgNamesHere(...)  FOR_EACH_KEEP_SEPARATION(MACRO_ExpandTemplateArgNamesHere1, __VA_ARGS__)
+#define MACRO_ExpandTemplateArgNamesHere1(x)   IF(MACRO_NotStartsWith_Typenames(x))(MACRO_ExpandTemplateArgNamesHere2, MACRO_EvalTypenamePluralArgName)(x)
+#define MACRO_ExpandTemplateArgNamesHere2(x)   IF(MACRO_NotStartsWith_Autos(x))(MACRO_ExpandTemplateArgNamesHere3, MACRO_EvalAutoPluralArgName)(x)
+#define MACRO_ExpandTemplateArgNamesHere3(x)   IF(MACRO_NotStartsWith_Template(x))(MACRO_Munch_OrdinaryTemplateArgName, MACRO_EvalTemplateTemplateArgName)(x)
+
+#define MACRO_EvalTemplateSig_template(...)  template < MACRO_ExpandTemplateParamKindsHere(__VA_ARGS__) >
+#define MACRO_EvalTemplateArgs_template(...)          < MACRO_ExpandTemplateArgNamesHere(__VA_ARGS__)   >
+#define MACRO_EvalConceptsSig_requires(...)  requires __VA_ARGS__
+
+#define MACRO_ExpandFunctionTypeHere1(x)       IF(MACRO_NotStartsWith_TemplateOrRequires(x))(APPLY, EAT)(x)
+#define MACRO_ExpandTemplateSigHere1(x)        IF(MACRO_NotStartsWith_Template(x))(EAT, APPLY)(MACRO_EvalTemplateSig_ ## x)
+#define MACRO_ExpandRequirementsHere1(x)       IF(MACRO_NotStartsWith_Requires(x))(EAT, APPLY)(MACRO_EvalConceptsSig_ ## x)
+#define MACRO_ExpandTemplateArgsHere1(x)       IF(MACRO_NotStartsWith_Template(x))(EAT, APPLY)(MACRO_EvalTemplateArgs_ ## x)
+#define MACRO_ExpandFunctionTypeHere(x)        IF(IS_PAREN(x))(APPLY, MACRO_ExpandFunctionTypeHere1)(x)
+#define MACRO_ExpandTemplateSigHere(x)         IF(IS_PAREN(x))(EAT, MACRO_ExpandTemplateSigHere1)(x)
+#define MACRO_ExpandRequirementsHere(x)        IF(IS_PAREN(x))(EAT, MACRO_ExpandRequirementsHere1)(x)
+#define MACRO_ExpandTemplateArgsHere(x)        IF(IS_PAREN(x))(EAT, MACRO_ExpandTemplateArgsHere1)(x)
+
+#define MACRO_MemberType(...)   FOR_EACH(MACRO_ExpandFunctionTypeHere, __VA_ARGS__)
+#define MACRO_TemplateSig(...)  FOR_EACH(MACRO_ExpandTemplateSigHere, __VA_ARGS__)
+#define MACRO_ConceptsSig(...)  FOR_EACH(MACRO_ExpandRequirementsHere, __VA_ARGS__)
+#define MACRO_TemplateArgs(...) FOR_EACH(MACRO_ExpandTemplateArgsHere, __VA_ARGS__)
+#define MACRO_MemAddress(name, ...) &IntrospectiveSelf::MACRO_Munch_Declspec(name) MACRO_TemplateArgs(__VA_ARGS__)
+
+#define MACRO_TypeOverloadAddAutoForFnType(x) IF(IS_PAREN(x))(auto x, x)
+#define MACRO_TypeOverloadResolve(name, ...) ::introspective::IF(MACRO_NotHasStaticSpec(name))(ObjectMemberType, StaticMemberType)<IntrospectiveSelf, MACRO_TypeOverloadAddAutoForFnType(MACRO_MemberType(__VA_ARGS__))>
+
+#define MACRO_Munch_Declspec_static
+#define MACRO_Munch_Declspec_constexpr
+#define MACRO_Munch_Declspec_inline
+#define MACRO_Munch_Declspec_virtual
+#define MACRO_Munch_Declspec_extern
+#define MACRO_Munch_Declspec_mutable
+#define MACRO_Munch_Declspec_thread_local
+#define MACRO_Munch_Declspec5(x) CAT(MACRO_Munch_Declspec_, x)
+#define MACRO_Munch_Declspec4(x) IF(MACRO_NotStartsWith_Declspec(x))(APPLY2, MACRO_Munch_Declspec5)(x)
+#define MACRO_Munch_Declspec3(x) MACRO_Munch_Declspec4(CAT(MACRO_Munch_Declspec_, x))
+#define MACRO_Munch_Declspec2(x) IF(MACRO_NotStartsWith_Declspec(x))(APPLY2, MACRO_Munch_Declspec3)(x)
+#define MACRO_Munch_Declspec1(x) MACRO_Munch_Declspec2(CAT(MACRO_Munch_Declspec_, x))
+#define MACRO_Munch_Declspec(x)  IF(MACRO_NotStartsWith_Declspec(x))(APPLY2, MACRO_Munch_Declspec1)(x)
 
 #endif
 
