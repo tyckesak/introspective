@@ -133,36 +133,6 @@ described above.
 
 Take a look at the examples for more details.
 
-## Additional member detection in classes
-
-As a bonus, the header also provides some short macros for
-detecting a specific member in an unspecified generic class.
-I'll mention them here briefly.
-
-* `HasMember(InType, member, ...) -> bool`. Indicates true if member `member`
-   can be found in type `InType`, regardless of whether the member is a function
-   or a variable. Actually returns either `std::true_type` or `std::false_type`,
-   but these are implicitly convertible to `bool` in any context. The varargs
-   must be filled with matching parameter types if the subject of the search
-   is a function with specific parameters.
-* `GetStaticMember(InType, member, MemberType) -> MemberType*`. Returns a pointer
-   to the static variable `InType::member`, if one such exists, otherwise
-   `nullptr`. `MemberType` may also be a function type, as in `int(std::string,
-   double)` without pointer notation. Actually returns either a valid value
-   of `MemberType*` or a `std::nullptr_t`, depending on the existence of
-   the member.
-* `GetStaticConstant(InType, member, MemberType) -> const MemberType*`. Same as
-   `GetStaticMember`, but enforces const-ness of the member. If the member
-   is not const-qualified, returns `nullptr`.
-* `GetObjectMember(InType, member, MemberType) -> MemberType InType::*`. Same as
-  the static version, but returns a pointer-to-member. Does not support object
-  member functions at the moment.
-
-These macros may be used inside a function and may be treated as such, they only
-hide two lines of template boilerplate code. As a consequence of template
-metaprogramming, these macros also support template type parameters as their
-argument.
-
 ## Requirements
 
 Fairly thin; the header file only depends on the standard library. However,
