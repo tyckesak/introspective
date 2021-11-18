@@ -31,7 +31,7 @@ set_target_properties(introspective PROPERTIES
 target_include_directories(introspective
     INTERFACE ${PROJECT_SOURCE_DIR}/include)
 
-if(IS_DIRECTORY ${INTSPEC_LUA_HEADER_PATH} AND IS_DIRECTORY ${INTSPEC_LUA_LIBRARY_PATH})
+if((IS_DIRECTORY ${INTSPEC_LUA_HEADER_PATH}) AND (IS_DIRECTORY ${INTSPEC_LUA_LIBRARY_PATH}))
     add_executable(luaexample example/LuaExample.cpp)
     set_target_properties(luaexample PROPERTIES
         CXX_STANDARD 20

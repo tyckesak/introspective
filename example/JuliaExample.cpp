@@ -139,14 +139,16 @@ private:
 
 // Since Julia does not bother with conforming to one single
 // function signature, we will make our own.
-using JlFn = jl_value_t* (*)(jl_value_t*, std::size_t);
+// The argument to the function is a reference to a one-dimensional Julia
+// array containing all arguments in order.
+using JlFn = jl_value_t* (*)(jl_value_t*);
 
 
 template <>
 struct introspective::ArgsMarshalling<JlFn>
 {
     template <bool, typename Data>
-    static auto FromEmbedded(jl_value_t* args, std::size_t nargs, std::size_t where)
+    static auto FromEmbedded(jl_value_t* args, std::size_t where)
     {
         if constexpr(std::is_same_v<std::remove_cvref_t<Data>, int>)
         {
@@ -168,7 +170,7 @@ struct introspective::ArgsMarshalling<JlFn>
 
 
     template <typename Data>
-    static jl_value_t* ToEmbedded(jl_value_t*, std::size_t, Data toReturn)
+    static jl_value_t* ToEmbedded(jl_value_t*, Data toReturn)
     {
         if constexpr(std::is_same_v<Data, int>)
         {
@@ -189,7 +191,7 @@ struct introspective::ArgsMarshalling<JlFn>
     }
 
 
-    static jl_value_t* ToEmbedded(jl_value_t*, std::size_t)
+    static jl_value_t* ToEmbedded(jl_value_t*)
     {
         // jl_nothing is the unit value, return it.
         return jl_nothing;
@@ -197,14 +199,13 @@ struct introspective::ArgsMarshalling<JlFn>
 
 
     template <bool, typename... DataArgTypes>
-    static bool PrepareExtraction(jl_value_t*, std::size_t)
+    static bool PrepareExtraction(jl_value_t* argsArray)
     {
-        // Type checking boilerplate.
-        return true;
+        return jl_is_array(argsArray) && jl_array_len(argsArray) == sizeof...(DataArgTypes);
     }
 
 
-    static jl_value_t* FailExtracted(jl_value_t*, std::size_t)
+    static jl_value_t* FailExtracted(jl_value_t*)
     {
         jl_error("Could not marshall input arguments");
     }
@@ -228,15 +229,15 @@ std::string GreetMe_impl()
 // All native functions that should be called from Julia need to
 // be declared extern "C", so that the 'ccall' Julia function can
 // find the function in the library or executable image.
-extern "C" jl_value_t* MakeTwoTimesTrunc(jl_value_t* args, std::size_t nargs)
+extern "C" jl_value_t* MakeTwoTimesTrunc(jl_value_t* args)
 {
-    return introspective::MarshallFn<JlFn, MakeTwoTimesTrunc_impl>()(args, nargs);
+    return introspective::MarshallFn<JlFn, MakeTwoTimesTrunc_impl>()(args);
 }
 
 
-extern "C" jl_value_t* GreetMe(jl_value_t* args, std::size_t nargs)
+extern "C" jl_value_t* GreetMe(jl_value_t* args)
 {
-    return introspective::MarshallFn<JlFn, GreetMe_impl>()(args, nargs);
+    return introspective::MarshallFn<JlFn, GreetMe_impl>()(args);
 }
 
 
@@ -265,8 +266,8 @@ end
 
 println(sqrt(2.0))
 println("Trying to call native functions...")
-println(ccall(:MakeTwoTimesTrunc, Any, (Any, Csize_t), [35.7], 1))
-println(ccall(:GreetMe, Any, (Any, Csize_t), [], 0))
+println(ccall(:MakeTwoTimesTrunc, Any, (Any,), [35.7]))
+println(ccall(:GreetMe, Any, (Any,), []))
 
             )""");
 }
