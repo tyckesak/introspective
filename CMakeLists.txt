@@ -42,7 +42,7 @@ if((IS_DIRECTORY ${INTSPEC_LUA_HEADER_PATH}) AND (IS_DIRECTORY ${INTSPEC_LUA_LIB
     target_link_libraries(luaexample introspective ${LUA_LIBRARY})
 endif()
 
-if(IS_DIRECTORY ${INTSPEC_WREN_HEADER_PATH} AND IS_DIRECTORY ${INTSPEC_WREN_LIBRARY_PATH})
+if((IS_DIRECTORY ${INTSPEC_WREN_HEADER_PATH}) AND (IS_DIRECTORY ${INTSPEC_WREN_LIBRARY_PATH}))
     add_executable(wrenexample example/WrenExample.cpp)
     set_target_properties(wrenexample PROPERTIES
         CXX_STANDARD 20
@@ -53,7 +53,7 @@ if(IS_DIRECTORY ${INTSPEC_WREN_HEADER_PATH} AND IS_DIRECTORY ${INTSPEC_WREN_LIBR
     target_link_libraries(wrenexample introspective ${WREN_LIBRARY})
 endif()
 
-if(IS_DIRECTORY ${INTSPEC_JULIA_HEADER_PATH} AND IS_DIRECTORY ${INTSPEC_JULIA_LIBRARY_PATH})
+if((IS_DIRECTORY ${INTSPEC_JULIA_HEADER_PATH}) AND (IS_DIRECTORY ${INTSPEC_JULIA_LIBRARY_PATH}))
     add_executable(juliaexample example/JuliaExample.cpp)
     set_target_properties(juliaexample PROPERTIES
         CXX_STANDARD 20
